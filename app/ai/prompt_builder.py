@@ -22,6 +22,40 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+
+def _smart_truncate_text(text: str, limit: int) -> str:
+    """智能截断：在换行符边界处截断，避免破坏文本结构"""
+    if len(text) <= limit:
+        return text
+    # 在限制范围内找最后一个换行符
+    cut_pos = text.rfind("\n", 0, limit)
+    if cut_pos <= 0:
+        # 没有合适的换行符，直接在限制处截断
+        cut_pos = limit
+    return text[:cut_pos] + "\n...[已截断]"
+
+
+def _smart_truncate_blocks(text: str, limit: int, separator: str = "\n\n---\n\n") -> str:
+    """在分隔符边界处截断块状文本（用于 Layer 2 拼接结果）"""
+    if len(text) <= limit:
+        return text
+    blocks = text.split(separator)
+    result_parts: list[str] = []
+    current_len = 0
+    omitted = 0
+    for block in blocks:
+        block_len = len(block)
+        # 加上分隔符长度（如果不是第一个块）
+        extra = len(separator) if result_parts else 0
+        if current_len + extra + block_len > limit:
+            omitted += 1
+            continue
+        result_parts.append(block)
+        current_len += extra + block_len
+    if omitted > 0:
+        result_parts.append(f"...[已截断，省略 {omitted} 条流的详细分析]")
+    return separator.join(result_parts)
+
 # Layer 1 每条流的固定采样包数（从配置读取）
 PACKETS_PER_FLOW_LAYER1 = AI_DEFAULTS["packets_per_flow_layer1"]
 
@@ -79,6 +113,15 @@ class PromptBuilder:
         else:
             anomaly_lines.append("  未检测到明显异常")
 
+        # Top flows 格式化
+        top_flows_data = stats.get("top_flows", [])
+        top_flow_lines = []
+        for f in top_flows_data:
+            top_flow_lines.append(
+                f"  [{f.get('flow_id', '?')}] {f.get('src', '?')} -> {f.get('dst', '?')} "
+                f"({f.get('protocol', '?')}) {f.get('bytes', 0)}B {f.get('packets', 0)}包"
+            )
+
         # 每条流 + 采样包
         flow_sections = []
         for flow in flows:
@@ -91,9 +134,13 @@ class PromptBuilder:
             total_flows=stats.get("total_flows", 0),
             duration=stats.get("duration", 0),
             bandwidth_bps=stats.get("bandwidth_bps", 0),
+            avg_packet_size=stats.get("avg_packet_size", 0),
+            avg_flow_size=stats.get("avg_flow_size", 0),
+            flow_size_median=stats.get("flow_size_median", 0),
             protocol_distribution="\n".join(proto_lines) or "无数据",
             top_src="\n".join(src_lines) or "无数据",
             top_dst="\n".join(dst_lines) or "无数据",
+            top_flows="\n".join(top_flow_lines) or "无数据",
             anomaly_summary="\n".join(anomaly_lines),
             all_flows_with_packets="\n".join(flow_sections),
         )
@@ -171,8 +218,8 @@ class PromptBuilder:
         layer2_limit = int(self._max_input_chars * _LAYER3_LAYER2_RATIO)
 
         user_prompt = get_layer3_template().format(
-            layer1_result=layer1_raw[:layer1_limit],
-            layer2_results=layer2_combined[:layer2_limit],
+            layer1_result=_smart_truncate_text(layer1_raw, layer1_limit),
+            layer2_results=_smart_truncate_blocks(layer2_combined, layer2_limit),
             total_packets=stats.get("total_packets", 0),
             total_flows=stats.get("total_flows", 0),
             suspicious_flow_count=suspicious_flow_count,

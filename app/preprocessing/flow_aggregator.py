@@ -33,6 +33,8 @@ class FlowAggregator:
         self._flows: dict[str, FlowRecord] = {}
         self._expired_flows: list[FlowRecord] = []
         self._lock = threading.Lock()
+        self._drop_warned = False
+        self._dropped_count = 0
 
     def update(self, packet: PacketRecord) -> None:
         """根据数据包更新流表（线程安全）"""
@@ -55,6 +57,14 @@ class FlowAggregator:
                     flow.flow_id = f"{flow.flow_id}_{int(flow.last_seen)}"
                     if len(self._expired_flows) < MAX_EXPIRED_FLOWS:
                         self._expired_flows.append(flow)
+                    else:
+                        self._dropped_count += 1
+                        if not self._drop_warned:
+                            logger.warning(
+                                f"过期流缓冲区已满 ({MAX_EXPIRED_FLOWS})，"
+                                f"丢弃过期流 {flow.flow_id}。后续丢弃将静默进行。"
+                            )
+                            self._drop_warned = True
                     self._flows[flow_key] = self._create_flow(flow_key, packet)
                     return
 
@@ -123,6 +133,17 @@ class FlowAggregator:
         with self._lock:
             self._flows.clear()
             self._expired_flows.clear()
+            self._drop_warned = False
+            self._dropped_count = 0
+
+    def get_stats(self) -> dict:
+        """返回聚合器内部统计（线程安全）"""
+        with self._lock:
+            return {
+                "active_flows": len(self._flows),
+                "expired_flows": len(self._expired_flows),
+                "dropped_expired": self._dropped_count,
+            }
 
     @staticmethod
     def _get_timeout(protocol: str) -> float:

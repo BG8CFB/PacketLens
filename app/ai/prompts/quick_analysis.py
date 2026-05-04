@@ -10,6 +10,9 @@ LAYER1_TEMPLATE = """# 全量流量分析任务
 - 总流数: {total_flows}
 - 抓包时长: {duration}s
 - 平均带宽: {bandwidth_bps} bps
+- 平均包大小: {avg_packet_size} bytes
+- 平均流大小: {avg_flow_size} bytes
+- 流大小中位数: {flow_size_median} bytes
 
 ### 协议分布
 {protocol_distribution}
@@ -19,6 +22,9 @@ LAYER1_TEMPLATE = """# 全量流量分析任务
 
 ### Top 目标 IP（按包数排序）
 {top_dst}
+
+### Top 流量流（按字节数）
+{top_flows}
 
 ### 预处理异常标记
 {anomaly_summary}

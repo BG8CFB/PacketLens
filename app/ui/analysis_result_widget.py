@@ -20,6 +20,7 @@ class AnalysisResultWidget(QWidget):
         super().__init__(parent)
         self._issue = issue
         self._expanded = False
+        self._flows_expanded = False
 
         self.setCursor(Qt.PointingHandCursor)
         # 使用 objectName 精确匹配样式，避免影响子 QWidget
@@ -69,17 +70,59 @@ class AnalysisResultWidget(QWidget):
             rec_label.setStyleSheet("color: #a6e3a1; font-size: 12px; border: none;")
             detail_layout.addWidget(rec_label)
 
-        # 受影响的流
+        # 受影响的流（可展开）
         if issue.affected_flows:
-            flows_text = "相关流: " + ", ".join(issue.affected_flows[:5])
-            if len(issue.affected_flows) > 5:
-                flows_text += f" 等 {len(issue.affected_flows)} 个"
-            flows_label = QLabel(flows_text)
-            flows_label.setStyleSheet("color: #6c7086; font-size: 11px; border: none;")
-            detail_layout.addWidget(flows_label)
+            self._flows_label = QLabel()
+            self._flows_label.setStyleSheet("color: #6c7086; font-size: 11px; border: none;")
+            self._flows_label.setWordWrap(True)
+            detail_layout.addWidget(self._flows_label)
 
-        self._detail_widget.setVisible(False)
+            if len(issue.affected_flows) > 5:
+                self._expand_flows_btn = QLabel()
+                self._expand_flows_btn.setStyleSheet(
+                    "color: #89b4fa; font-size: 11px; border: none; text-decoration: underline;"
+                )
+                self._expand_flows_btn.setCursor(Qt.PointingHandCursor)
+                self._expand_flows_btn.mousePressEvent = self._toggle_flows
+                detail_layout.addWidget(self._expand_flows_btn)
+            else:
+                self._expand_flows_btn = None
+
+            self._update_flows_display()
+        else:
+            self._flows_label = None
+            self._expand_flows_btn = None
+
+        # 受影响的 IP（如果有）
+        if issue.affected_ips:
+            ips_text = "相关 IP: " + ", ".join(issue.affected_ips)
+            ips_label = QLabel(ips_text)
+            ips_label.setStyleSheet("color: #6c7086; font-size: 11px; border: none;")
+            ips_label.setWordWrap(True)
+            detail_layout.addWidget(ips_label)
+
+        self._detail_widget.setVisible(True)
+        self._expanded = True
         layout.addWidget(self._detail_widget)
+
+    def _update_flows_display(self) -> None:
+        """更新受影响流的显示文本"""
+        flows = self._issue.affected_flows
+        if self._flows_expanded or len(flows) <= 5:
+            self._flows_label.setText("相关流: " + ", ".join(flows))
+        else:
+            self._flows_label.setText("相关流: " + ", ".join(flows[:5]))
+
+        if self._expand_flows_btn:
+            if self._flows_expanded:
+                self._expand_flows_btn.setText(f"收起（共 {len(flows)} 个）")
+            else:
+                self._expand_flows_btn.setText(f"展开全部 {len(flows)} 个")
+
+    def _toggle_flows(self, event=None) -> None:
+        """切换流列表展开/收起"""
+        self._flows_expanded = not self._flows_expanded
+        self._update_flows_display()
 
     def mousePressEvent(self, event):
         """点击卡片切换展开/收起状态"""
@@ -97,7 +140,7 @@ class AnalysisResultWidget(QWidget):
             f"  border-left: 4px solid {severity_color};"
             f"  border-top: 1px solid #313244;"
             f"  border-right: 1px solid #313244;"
-            f"  border-bottom: 1px solid #313244;"
+            f"  border-bottom: 1px solid {severity_color};"
             f"  border-radius: 4px;"
             f"}}"
         )

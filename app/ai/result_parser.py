@@ -7,7 +7,7 @@ import logging
 import re
 from datetime import datetime, timezone
 
-from app.models.analysis_result import AnalysisIssue, AnalysisResult
+from app.models.analysis_result import AnalysisIssue, AnalysisResult, FlowAnalysis
 
 VALID_SEVERITIES = frozenset({"Critical", "Warning", "Info", "Normal"})
 VALID_CATEGORIES = frozenset({
@@ -108,6 +108,7 @@ class ResultParser:
                     title=item.get("title", "未命名"),
                     description=item.get("description", ""),
                     affected_flows=item.get("affected_flows", []),
+                    affected_ips=item.get("affected_ips", []),
                     recommendation=item.get("recommendation", ""),
                 )
             )
@@ -121,6 +122,61 @@ class ResultParser:
             protocol_insights=parsed.get("protocol_insights", {}),
             overall_assessment=parsed.get("overall_assessment", ""),
             raw_ai_response=raw,
+            risk_level=parsed.get("risk_level", ""),
+        )
+
+    def parse_layer2(self, response_text: str) -> FlowAnalysis:
+        """解析 Layer 2 单流分析响应为 FlowAnalysis"""
+        parsed = self._extract_json(response_text)
+
+        if parsed is None:
+            return FlowAnalysis(
+                flow_id="",
+                verdict="inconclusive",
+                confidence=0.0,
+                evidence=[],
+                raw_text=response_text,
+            )
+
+        # 提取 verdict 并规范化
+        raw_verdict = parsed.get("verdict", "inconclusive").strip().lower()
+        verdict = raw_verdict if raw_verdict in FlowAnalysis.VALID_VERDICTS else "inconclusive"
+
+        # 提取 confidence 并钳位到 [0.0, 1.0]
+        try:
+            confidence = max(0.0, min(1.0, float(parsed.get("confidence", 0.0))))
+        except (TypeError, ValueError):
+            confidence = 0.0
+
+        # 提取 issues
+        issues = []
+        for item in parsed.get("issues", []):
+            if not isinstance(item, dict):
+                continue
+            issues.append(
+                AnalysisIssue(
+                    severity=normalize_severity(item.get("severity", "Info")),
+                    category=normalize_category(item.get("category", "General")),
+                    title=item.get("title", "未命名"),
+                    description=item.get("description", ""),
+                    affected_flows=item.get("affected_flows", []),
+                    affected_ips=item.get("affected_ips", []),
+                    recommendation=item.get("recommendation", ""),
+                )
+            )
+
+        # 提取 evidence
+        evidence = parsed.get("evidence", [])
+        if not isinstance(evidence, list):
+            evidence = [str(evidence)]
+
+        return FlowAnalysis(
+            flow_id=parsed.get("flow_id", ""),
+            verdict=verdict,
+            confidence=confidence,
+            issues=issues,
+            evidence=evidence,
+            raw_text=response_text,
         )
 
     def _fallback_result(self, raw: str, session_id: str, mode: str) -> AnalysisResult:

@@ -19,7 +19,7 @@ from app.ai.ai_engine import AIEngine
 from app.ai.prompt_builder import PromptBuilder
 from app.ai.result_parser import ResultParser
 from app.config.ai_defaults import AI_DEFAULTS
-from app.models.analysis_result import AnalysisResult
+from app.models.analysis_result import AnalysisResult, FlowAnalysis
 from app.models.flow_record import FlowRecord
 from app.models.packet_record import PacketRecord
 
@@ -42,6 +42,7 @@ class AnalysisWorker(QThread):
     analysis_progress = Signal(str)
     analysis_completed = Signal(object)  # AnalysisResult
     analysis_error = Signal(str)
+    analysis_stage = Signal(str)  # 阶段描述（如 "Layer 1/3: 整体流量概览"）
 
     def __init__(
         self,
@@ -130,6 +131,7 @@ class AnalysisWorker(QThread):
     def _run_layer1_only(self, session_id: str) -> AnalysisResult:
         """快速模式：仅执行 Layer 1"""
         start = time.time()
+        self.analysis_stage.emit("Layer 1/1: 整体流量概览分析中...")
 
         user_prompt, system_prompt = self._prompt_builder.build_layer1_prompt(
             self._flows, self._packets, self._stats, self._anomalies,
@@ -170,6 +172,7 @@ class AnalysisWorker(QThread):
         if self.isInterruptionRequested():
             return self._empty_result(session_id, "deep", start)
 
+        self.analysis_stage.emit("Layer 1/3: 整体流量概览分析中...")
         self.analysis_progress.emit("[Layer 1/全量分析]\n")
         user_prompt, system_prompt = self._prompt_builder.build_layer1_prompt(
             self._flows, self._packets, self._stats, self._anomalies,
@@ -199,16 +202,20 @@ class AnalysisWorker(QThread):
         # ── Layer 2: 可疑流并行深度分析 ──
         suspicious_flows = self._extract_suspicious_flows(layer1_result)
         layer2_texts: list[str] = []
+        flow_analyses: list[FlowAnalysis] = []
 
         if suspicious_flows and self._packets:
             layer2_count = min(len(suspicious_flows), MAX_LAYER2_FLOWS)
+            self.analysis_stage.emit(
+                f"Layer 2/3: 深度分析可疑流 ({layer2_count} 条)..."
+            )
             self.analysis_progress.emit(
                 f"\n\n[Layer 2/可疑流分析] 发现 {len(suspicious_flows)} 条可疑流，"
                 f"并行分析 {layer2_count} 条...\n"
             )
 
-            layer2_texts = self._run_layer2_parallel(
-                suspicious_flows[:layer2_count], layer1_text,
+            layer2_texts, flow_analyses = self._run_layer2_parallel(
+                suspicious_flows[:layer2_count], layer1_result, layer1_text,
             )
 
         if self.isInterruptionRequested():
@@ -216,6 +223,7 @@ class AnalysisWorker(QThread):
 
         # ── Layer 3: 综合报告 ──
         confirmed_count = self._count_confirmed_issues(layer1_result)
+        self.analysis_stage.emit("Layer 3/3: 综合安全报告生成中...")
         self.analysis_progress.emit("\n\n[Layer 3/综合报告]\n")
 
         user_prompt, system_prompt = self._prompt_builder.build_layer3_prompt(
@@ -249,13 +257,22 @@ class AnalysisWorker(QThread):
 
         # 最终结果使用 Layer 3 的解析，合并所有 issues
         final_result = self._result_parser.parse(layer3_text, session_id, "deep")
-        # 把 Layer 2 发现的 issues 也合并进来
-        if layer2_texts:
-            for l2_text in layer2_texts:
-                l2_parsed = self._result_parser.parse(l2_text, session_id, "deep")
-                for issue in l2_parsed.issues:
-                    if not any(i.title == issue.title for i in final_result.issues):
-                        final_result.issues.append(issue)
+
+        # 存入 Layer 2 逐流分析结果
+        final_result.flow_analyses = flow_analyses
+
+        # 把 Layer 2 发现的 issues 也合并进来（按 title+affected_flows 去重）
+        existing_keys = {
+            (i.title, tuple(sorted(i.affected_flows)))
+            for i in final_result.issues
+        }
+        for l2_text in layer2_texts:
+            l2_parsed = self._result_parser.parse(l2_text, session_id, "deep")
+            for issue in l2_parsed.issues:
+                key = (issue.title, tuple(sorted(issue.affected_flows)))
+                if key not in existing_keys:
+                    final_result.issues.append(issue)
+                    existing_keys.add(key)
 
         final_result.duration_seconds = elapsed
         final_result.token_usage = self._engine.last_usage
@@ -264,26 +281,26 @@ class AnalysisWorker(QThread):
     def _run_layer2_parallel(
         self,
         flows: list[FlowRecord],
-        layer1_context: str,
-    ) -> list[str]:
-        """并行执行 Layer 2 分析，返回每条流的原始响应文本
+        layer1_result: AnalysisResult,
+        layer1_text: str,
+    ) -> tuple[list[str], list[FlowAnalysis]]:
+        """并行执行 Layer 2 分析，返回原始响应文本和 FlowAnalysis 列表
 
         使用线程池并发，并发数受 max_concurrency 限制。
         每个 Worker 线程独立创建 AIEngine 副本以保证线程安全。
         """
-        # 为每个工作线程准备独立的 engine 副本
         results: dict[int, str] = {}
+        context = self._build_layer2_context(layer1_result, layer1_text)
 
         def analyze_single_flow(idx: int, flow: FlowRecord) -> tuple[int, str]:
             """单条流的分析任务（在工作线程中执行）"""
             try:
-                # 通过公开方法创建线程安全的独立实例
                 worker_engine = self._engine.clone_for_worker(max_tokens=self._max_tokens)
 
                 user_prompt, system_prompt = self._prompt_builder.build_layer2_prompt(
                     flow=flow,
                     packets=self._packets,
-                    context=f"来自 Layer 1 全量分析的可疑流。Layer 1 摘要: {layer1_context[:500]}",
+                    context=context,
                 )
 
                 response = worker_engine.analyze_stream(
@@ -302,6 +319,13 @@ class AnalysisWorker(QThread):
         workers = min(len(flows), self._max_concurrency)
         logger.info(f"Layer 2 并行分析: {len(flows)} 条流, {workers} 并发")
 
+        # 每条流开始前通知 UI
+        for i, flow in enumerate(flows):
+            self.analysis_progress.emit(
+                f"  → 分析: {flow.src_ip}:{flow.src_port} → "
+                f"{flow.dst_ip}:{flow.dst_port}\n"
+            )
+
         with ThreadPoolExecutor(max_workers=workers) as pool:
             futures = {
                 pool.submit(analyze_single_flow, i, flow): i
@@ -317,7 +341,6 @@ class AnalysisWorker(QThread):
                     idx, text = future.result()
                     results[idx] = text
                     completed += 1
-                    # 每完成一条流通知 UI
                     flow = flows[idx]
                     self.analysis_progress.emit(
                         f"\n  [完成 {completed}/{len(flows)}] "
@@ -326,8 +349,53 @@ class AnalysisWorker(QThread):
                 except Exception as e:
                     logger.warning(f"Layer 2 任务异常: {e}")
 
-        # 按原始顺序返回结果
-        return [results[i] for i in sorted(results.keys()) if i in results]
+        # 按原始顺序返回原始文本
+        ordered_texts = [results[i] for i in sorted(results.keys()) if i in results]
+
+        # 解析每条流的 Layer 2 结果为 FlowAnalysis
+        flow_analyses = []
+        for text in ordered_texts:
+            flow_analysis = self._result_parser.parse_layer2(text)
+            flow_analyses.append(flow_analysis)
+
+        return ordered_texts, flow_analyses
+
+    @staticmethod
+    def _build_layer2_context(
+        layer1_result: AnalysisResult,
+        layer1_text: str,
+        max_chars: int = 3000,
+    ) -> str:
+        """构建 Layer 2 结构化上下文，比直接截断更信息密集"""
+        parts: list[str] = ["来自 Layer 1 全量分析的可疑流。\n"]
+
+        # 优先加入摘要
+        if layer1_result.summary:
+            parts.append(f"Layer 1 摘要: {layer1_result.summary}\n")
+
+        # 加入按严重性排序的 issue 列表
+        severity_order = {"Critical": 0, "Warning": 1, "Info": 2, "Normal": 3}
+        sorted_issues = sorted(
+            layer1_result.issues,
+            key=lambda i: severity_order.get(i.severity, 99),
+        )
+        if sorted_issues:
+            parts.append("Layer 1 发现的问题:")
+            for issue in sorted_issues:
+                flows_str = ", ".join(issue.affected_flows[:5])
+                if len(issue.affected_flows) > 5:
+                    flows_str += f" 等{len(issue.affected_flows)}个"
+                parts.append(
+                    f"  [{issue.severity}] {issue.title} (相关流: {flows_str})"
+                )
+            parts.append("")
+
+        structured = "\n".join(parts)
+        remaining = max_chars - len(structured)
+        if remaining > 200 and layer1_text:
+            structured += f"\nLayer 1 原始分析（截取）:\n{layer1_text[:remaining]}"
+
+        return structured[:max_chars]
 
     def _extract_suspicious_flows(self, result: AnalysisResult) -> list[FlowRecord]:
         """从 Layer 1 结果中提取需要钻取的可疑流"""

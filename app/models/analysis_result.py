@@ -15,6 +15,7 @@ class AnalysisIssue:
     title: str
     description: str
     affected_flows: list[str] = field(default_factory=list)
+    affected_ips: list[str] = field(default_factory=list)
     recommendation: str = ""
     raw_detail: str | None = None
 
@@ -26,6 +27,7 @@ class AnalysisIssue:
             "title": self.title,
             "description": self.description,
             "affected_flows": self.affected_flows,
+            "affected_ips": self.affected_ips,
             "recommendation": self.recommendation,
             "raw_detail": self.raw_detail,
         }
@@ -39,8 +41,48 @@ class AnalysisIssue:
             title=data.get("title", ""),
             description=data.get("description", ""),
             affected_flows=data.get("affected_flows", []),
+            affected_ips=data.get("affected_ips", []),
             recommendation=data.get("recommendation", ""),
             raw_detail=data.get("raw_detail"),
+        )
+
+
+@dataclass
+class FlowAnalysis:
+    """Layer 2 单流分析结果"""
+
+    flow_id: str
+    verdict: str  # malicious | suspicious | benign | inconclusive
+    confidence: float  # 0.0 ~ 1.0
+    issues: list[AnalysisIssue] = field(default_factory=list)
+    evidence: list[str] = field(default_factory=list)
+    raw_text: str = ""
+
+    VALID_VERDICTS = frozenset({"malicious", "suspicious", "benign", "inconclusive"})
+
+    def to_dict(self) -> dict:
+        """序列化为字典"""
+        return {
+            "flow_id": self.flow_id,
+            "verdict": self.verdict,
+            "confidence": self.confidence,
+            "issues": [issue.to_dict() for issue in self.issues],
+            "evidence": self.evidence,
+            "raw_text": self.raw_text,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> FlowAnalysis:
+        """从字典反序列化"""
+        issues_data = data.get("issues", [])
+        issues = [AnalysisIssue.from_dict(i) for i in issues_data]
+        return cls(
+            flow_id=data.get("flow_id", ""),
+            verdict=data.get("verdict", "inconclusive"),
+            confidence=max(0.0, min(1.0, data.get("confidence", 0.0))),
+            issues=issues,
+            evidence=data.get("evidence", []),
+            raw_text=data.get("raw_text", ""),
         )
 
 
@@ -58,6 +100,8 @@ class AnalysisResult:
     raw_ai_response: str = ""
     token_usage: dict = field(default_factory=dict)
     duration_seconds: float = 0.0
+    risk_level: str = ""  # Critical | High | Medium | Low | Normal
+    flow_analyses: list[FlowAnalysis] = field(default_factory=list)
 
     @property
     def critical_count(self) -> int:
@@ -92,6 +136,8 @@ class AnalysisResult:
             "raw_ai_response": self.raw_ai_response,
             "token_usage": self.token_usage,
             "duration_seconds": self.duration_seconds,
+            "risk_level": self.risk_level,
+            "flow_analyses": [fa.to_dict() for fa in self.flow_analyses],
         }
 
     @classmethod
@@ -99,6 +145,8 @@ class AnalysisResult:
         """从字典反序列化"""
         issues_data = data.get("issues", [])
         issues = [AnalysisIssue.from_dict(i) for i in issues_data]
+        flow_analyses_data = data.get("flow_analyses", [])
+        flow_analyses = [FlowAnalysis.from_dict(fa) for fa in flow_analyses_data]
         timestamp_str = data.get("timestamp", "")
         if timestamp_str:
             timestamp = datetime.fromisoformat(timestamp_str)
@@ -117,4 +165,6 @@ class AnalysisResult:
             raw_ai_response=data.get("raw_ai_response", ""),
             token_usage=data.get("token_usage", {}),
             duration_seconds=data.get("duration_seconds", 0.0),
+            risk_level=data.get("risk_level", ""),
+            flow_analyses=flow_analyses,
         )

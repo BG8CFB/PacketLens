@@ -242,6 +242,7 @@ class MainWindow(QMainWindow):
         self._analysis_worker.analysis_progress.connect(self._on_analysis_progress)
         self._analysis_worker.analysis_completed.connect(self._on_analysis_completed)
         self._analysis_worker.analysis_error.connect(self._on_analysis_error)
+        self._analysis_worker.analysis_stage.connect(self._on_analysis_stage)
         self._analysis_worker.start()
 
     def _start_deep_analysis(self) -> None:
@@ -272,6 +273,7 @@ class MainWindow(QMainWindow):
         self._analysis_worker.analysis_progress.connect(self._on_analysis_progress)
         self._analysis_worker.analysis_completed.connect(self._on_analysis_completed)
         self._analysis_worker.analysis_error.connect(self._on_analysis_error)
+        self._analysis_worker.analysis_stage.connect(self._on_analysis_stage)
         self._analysis_worker.start()
 
     # ── 信号处理 ──
@@ -329,6 +331,9 @@ class MainWindow(QMainWindow):
 
     def _on_analysis_progress(self, chunk: str) -> None:
         self._analysis_panel.update_progress(chunk)
+
+    def _on_analysis_stage(self, stage: str) -> None:
+        self._analysis_panel.update_stage(stage)
 
     def _on_analysis_completed(self, result: AnalysisResult) -> None:
         self._analysis_panel.display_results(result)
