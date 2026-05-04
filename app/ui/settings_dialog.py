@@ -23,7 +23,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from app.ai.ai_engine import AIEngine
+from app.ai.component_factory import test_connection
 from app.config.ai_defaults import AI_DEFAULTS
 from app.storage.config_manager import ConfigManager
 
@@ -38,6 +38,7 @@ class SettingsDialog(QDialog):
         self._active_name = config.get_active_provider_name()
         self._current_index = 0
 
+        self._test_poll_timer = None  # 测试连接轮询定时器
         self.setWindowTitle("PacketLens 设置")
         self.setMinimumWidth(600)
         self.setMinimumHeight(520)
@@ -124,6 +125,12 @@ class SettingsDialog(QDialog):
         self._model_edit.setPlaceholderText("例: gpt-4o, deepseek-chat, MiniMax-M2.7")
         form.addRow("模型 ID:", self._model_edit)
 
+        self._type_combo = QComboBox()
+        self._type_combo.addItem("OpenAI 兼容协议", "openai")
+        self._type_combo.addItem("Anthropic 原生协议", "anthropic")
+        self._type_combo.currentIndexChanged.connect(self._on_type_changed)
+        form.addRow("协议类型:", self._type_combo)
+
         self._context_window_spin = QSpinBox()
         self._context_window_spin.setRange(4096, 1048576)
         self._context_window_spin.setSingleStep(32768)
@@ -146,6 +153,11 @@ class SettingsDialog(QDialog):
         self._timeout_spin.setRange(10, 600)
         self._timeout_spin.setSuffix(" 秒")
         form.addRow("超 时:", self._timeout_spin)
+
+        self._concurrency_spin = QSpinBox()
+        self._concurrency_spin.setRange(1, 10)
+        self._concurrency_spin.setToolTip("深度分析时同时进行的 AI 请求数量，受 API 速率限制约束")
+        form.addRow("并发数:", self._concurrency_spin)
 
         layout.addLayout(form)
 
@@ -219,6 +231,18 @@ class SettingsDialog(QDialog):
         self._active_name = self._providers[index]["name"]
         self._load_provider_to_ui()
 
+    def _on_type_changed(self, index: int) -> None:
+        """切换协议类型时更新 UI 提示"""
+        provider_type = self._type_combo.currentData()
+        if provider_type == "anthropic":
+            self._api_base_edit.setPlaceholderText("Anthropic 无需填写（固定官方 API）")
+            self._api_base_edit.setToolTip("Anthropic 类型不使用自定义 API 地址")
+            self._model_edit.setPlaceholderText("例: claude-sonnet-4-20250514, claude-opus-4-20250514")
+        else:
+            self._api_base_edit.setPlaceholderText("例: https://api.openai.com/v1")
+            self._api_base_edit.setToolTip("")
+            self._model_edit.setPlaceholderText("例: gpt-4o, deepseek-chat, MiniMax-M2.7")
+
     def _load_provider_to_ui(self) -> None:
         """从当前选中 provider 加载到 UI"""
         if not self._providers:
@@ -240,6 +264,14 @@ class SettingsDialog(QDialog):
         self._timeout_spin.setValue(
             p.get("timeout", AI_DEFAULTS["timeout"])
         )
+        self._concurrency_spin.setValue(
+            p.get("max_concurrency", AI_DEFAULTS["max_concurrency"])
+        )
+
+        # 协议类型
+        provider_type = p.get("provider_type", "openai")
+        idx = self._type_combo.findData(provider_type)
+        self._type_combo.setCurrentIndex(idx if idx >= 0 else 0)
 
         # 内置默认 provider 不可编辑，只能选择
         is_default = p.get("is_default", False)
@@ -259,6 +291,8 @@ class SettingsDialog(QDialog):
         p["max_tokens"] = self._max_tokens_spin.value()
         p["temperature"] = self._temperature_spin.value()
         p["timeout"] = self._timeout_spin.value()
+        p["max_concurrency"] = self._concurrency_spin.value()
+        p["provider_type"] = self._type_combo.currentData()
 
     def _load_capture_values(self) -> None:
         self._duration_spin.setValue(self._config.get("default_capture_duration", 60))
@@ -275,6 +309,8 @@ class SettingsDialog(QDialog):
         self._max_tokens_spin.setEnabled(editable)
         self._temperature_spin.setEnabled(editable)
         self._timeout_spin.setEnabled(editable)
+        self._concurrency_spin.setEnabled(editable)
+        self._type_combo.setEnabled(editable)
         self._toggle_key_btn.setEnabled(editable)
 
         if not editable:
@@ -304,6 +340,7 @@ class SettingsDialog(QDialog):
         self._save_current_provider()
         new_provider = {
             "name": name,
+            "provider_type": "openai",
             "api_base": "",
             "api_key": "",
             "model": "",
@@ -311,6 +348,7 @@ class SettingsDialog(QDialog):
             "max_tokens": AI_DEFAULTS["max_tokens"],
             "temperature": AI_DEFAULTS["temperature"],
             "timeout": AI_DEFAULTS["timeout"],
+            "max_concurrency": AI_DEFAULTS["max_concurrency"],
             "is_default": False,
         }
         self._providers.append(new_provider)
@@ -358,6 +396,13 @@ class SettingsDialog(QDialog):
             self._api_key_edit.setEchoMode(QLineEdit.Password)
             self._toggle_key_btn.setText("显示")
 
+    def reject(self) -> None:
+        """关闭对话框前清理测试连接资源"""
+        if self._test_poll_timer is not None:
+            self._test_poll_timer.stop()
+            self._test_poll_timer = None
+        super().reject()
+
     def _test_connection(self) -> None:
         """后台线程测试 API 连接，避免阻塞 UI"""
         self._test_btn.setEnabled(False)
@@ -367,6 +412,7 @@ class SettingsDialog(QDialog):
         api_key = self._api_key_edit.text().strip() or None
         base_url = self._api_base_edit.text().strip() or None
         model = self._model_edit.text().strip() or None
+        provider_type = self._type_combo.currentData() or "openai"
         timeout = self._timeout_spin.value()
         ctx = self._context_window_spin.value()
         mt = self._max_tokens_spin.value()
@@ -377,12 +423,16 @@ class SettingsDialog(QDialog):
 
         def run_test():
             try:
-                engine = AIEngine(
-                    api_key=api_key, base_url=base_url,
-                    model=model, timeout=timeout,
-                    context_window_tokens=ctx, max_tokens=mt,
-                )
-                result["ok"], result["msg"] = engine.test_connection()
+                ai_config = {
+                    "provider_type": provider_type,
+                    "api_key": api_key or "",
+                    "base_url": base_url or "",
+                    "model": model or "",
+                    "timeout": timeout,
+                    "context_window_tokens": ctx,
+                    "max_tokens": mt,
+                }
+                result["ok"], result["msg"] = test_connection(ai_config)
             except Exception as e:
                 result["ok"] = False
                 result["msg"] = f"错误: {str(e)[:100]}"
@@ -396,9 +446,12 @@ class SettingsDialog(QDialog):
         self._test_poll_timer.setInterval(100)
 
         def check_done():
+            if self._test_poll_timer is None:
+                return  # 对话框已关闭
             if thread.is_alive():
                 return
             self._test_poll_timer.stop()
+            self._test_poll_timer = None
             if result["ok"]:
                 self._test_status.setText(result["msg"])
                 self._test_status.setStyleSheet("color: #44BB44;")

@@ -7,6 +7,7 @@ from datetime import datetime
 
 from PySide6.QtCore import QTimer, Signal
 from PySide6.QtWidgets import (
+    QCheckBox,
     QComboBox,
     QHBoxLayout,
     QLabel,
@@ -61,6 +62,12 @@ class CaptureControls(QWidget):
         self._duration_combo.setCurrentIndex(2)  # 默认 60秒
         self._duration_combo.setMinimumWidth(80)
         layout.addWidget(self._duration_combo)
+
+        # 混杂模式
+        self._promisc_cb = QCheckBox("混杂模式")
+        self._promisc_cb.setChecked(True)
+        self._promisc_cb.setToolTip("启用混杂模式可捕获非本机流量")
+        layout.addWidget(self._promisc_cb)
 
         # 开始/停止按钮
         self._start_btn = QPushButton("开始抓包")
@@ -145,7 +152,7 @@ class CaptureControls(QWidget):
                 return
             bpf = self.get_bpf_filter()
             duration = self.get_duration()
-            self.start_requested.emit(iface, bpf, duration, True)
+            self.start_requested.emit(iface, bpf, duration, self._promisc_cb.isChecked())
 
     def _update_elapsed(self) -> None:
         if self._start_time:

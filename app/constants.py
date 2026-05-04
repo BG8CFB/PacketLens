@@ -1,53 +1,15 @@
 """全局常量 — 非配置类常量（颜色、协议、阈值等）
 
+AI 配置加载逻辑已迁移至 app/config/provider_loader.py。
 AI 可配置参数的默认值定义在 app/config/ai_defaults.py。
-内置 provider 的具体值从 .env 的 AI_* 环境变量加载。
 """
 
-import os
-
-from app.config.ai_defaults import AI_DEFAULTS
+# 向后兼容重导出（其他模块可能仍从此处 import）
+from app.config.provider_loader import load_builtin_provider  # noqa: F401
 
 # 应用信息
 APP_NAME = "PacketLens"
 APP_VERSION = "1.0.0"
-
-# 内置 provider 缓存（首次调用后缓存，避免重复扫描环境变量）
-_builtin_provider_cache: dict | None = None
-
-
-def load_builtin_provider() -> dict | None:
-    """从环境变量加载内置 AI Provider 配置
-
-    环境变量格式：AI_NAME, AI_API_BASE, AI_API_KEY, AI_MODEL, 以及可选的
-    AI_CONTEXT_WINDOW, AI_MAX_TOKENS, AI_TEMPERATURE, AI_TIMEOUT。
-
-    Returns:
-        provider dict（含 is_default=True）或 None（AI_NAME 为空时）
-    """
-    global _builtin_provider_cache
-    if _builtin_provider_cache is not None:
-        return _builtin_provider_cache
-
-    name = os.environ.get("AI_NAME", "").strip()
-    if not name:
-        _builtin_provider_cache = None
-        return None
-
-    provider = {
-        "name": name,
-        "api_base": os.environ.get("AI_API_BASE", "").strip(),
-        "api_key": os.environ.get("AI_API_KEY", "").strip(),
-        "model": os.environ.get("AI_MODEL", "").strip(),
-        "context_window_tokens": int(os.environ.get("AI_CONTEXT_WINDOW") or AI_DEFAULTS["context_window_tokens"]),
-        "max_tokens": int(os.environ.get("AI_MAX_TOKENS") or AI_DEFAULTS["max_tokens"]),
-        "temperature": float(os.environ.get("AI_TEMPERATURE") or AI_DEFAULTS["temperature"]),
-        "timeout": int(os.environ.get("AI_TIMEOUT") or AI_DEFAULTS["timeout"]),
-        "is_default": True,
-    }
-
-    _builtin_provider_cache = provider
-    return provider
 
 # 抓包配置
 DEFAULT_CAPTURE_DURATION = 60  # 秒
@@ -81,6 +43,7 @@ PROTOCOL_COLORS = {
     "DNS": "#8844CC",
     "TLS": "#CC44AA",
     "HTTP": "#44CCAA",
+    "QUIC": "#CC44CC",
 }
 
 # 存储配置

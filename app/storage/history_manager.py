@@ -103,3 +103,27 @@ class HistoryManager:
             if self._conn:
                 self._conn.close()
                 self._conn = None
+
+    def __del__(self) -> None:
+        self.close()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb) -> None:
+        self.close()
+
+    def purge_old_sessions(self, retention_days: int = 30) -> int:
+        """清理超过保留天数的历史会话，返回删除数量"""
+        if not self._conn:
+            return 0
+        with self._lock:
+            cursor = self._conn.execute(
+                "DELETE FROM sessions WHERE created_at < datetime('now', ?)",
+                (f"-{retention_days} days",),
+            )
+            self._conn.commit()
+            deleted = cursor.rowcount
+        if deleted > 0:
+            logger.info(f"清理了 {deleted} 条过期会话记录 (>{retention_days}天)")
+        return deleted

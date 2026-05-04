@@ -71,7 +71,7 @@ class CaptureEngine:
         self._anomaly_marker = AnomalyMarker()
 
         self._stop_lock = threading.Lock()
-        self._is_capturing = False
+        self._capture_active = threading.Event()
         self._start_time: datetime | None = None
         self._pcap_path: str | None = None
         self._total_captured = 0
@@ -101,7 +101,7 @@ class CaptureEngine:
 
     @property
     def is_capturing(self) -> bool:
-        return self._is_capturing
+        return self._capture_active.is_set()
 
     @property
     def total_captured(self) -> int:
@@ -142,7 +142,7 @@ class CaptureEngine:
         on_complete: Callable | None = None,
     ) -> bool:
         """开始抓包"""
-        if self._is_capturing:
+        if self._capture_active.is_set():
             logger.warning("已在抓包中，忽略重复启动请求")
             return False
 
@@ -197,7 +197,7 @@ class CaptureEngine:
         if duration > 0:
             self._duration_timer.start(duration * 1000)
 
-        self._is_capturing = True
+        self._capture_active.set()
         self._signals.capture_started.emit()
         logger.info(f"抓包已启动: iface={iface}, duration={duration}s, filter={bpf_filter or '(无)'}")
         return True
@@ -208,10 +208,10 @@ class CaptureEngine:
         if not self._stop_lock.acquire(blocking=False):
             return
         try:
-            if not self._is_capturing:
+            if not self._capture_active.is_set():
                 return
 
-            self._is_capturing = False
+            self._capture_active.clear()
             self._poll_timer.stop()
             self._duration_timer.stop()
 
@@ -316,5 +316,11 @@ class CaptureEngine:
     def _on_sniff_error(self, error_msg: str) -> None:
         """抓包线程错误回调 — 通过信号转发到主线程执行 stop_capture"""
         self._signals.capture_error.emit(error_msg)
-        if self._is_capturing:
+        if self._capture_active.is_set():
             self._signals._stop_requested.emit()
+
+    def cleanup(self) -> None:
+        """清理资源，关闭线程池"""
+        if self._capture_active.is_set():
+            self.stop_capture()
+        self._preprocess_executor.shutdown(wait=False)

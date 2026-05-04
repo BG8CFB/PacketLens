@@ -18,8 +18,11 @@ def main():
     from pathlib import Path
     env_path = Path(__file__).resolve().parent / ".env"
     if env_path.exists():
-        from dotenv import load_dotenv
-        load_dotenv(env_path)
+        try:
+            from dotenv import load_dotenv
+            load_dotenv(env_path)
+        except ImportError:
+            pass
 
     from app.application import create_application
     from app.ui.main_window import MainWindow

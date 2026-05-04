@@ -7,6 +7,8 @@ import queue
 import threading
 from pathlib import Path
 
+from app.constants import MAX_PCAP_FILE_SIZE_MB
+
 logger = logging.getLogger(__name__)
 
 
@@ -45,6 +47,15 @@ class PCAPWriter(threading.Thread):
                         writer.write(pkt)
                         with self._lock:
                             self._total_written += 1
+                            if self._total_written % 1000 == 0:
+                                try:
+                                    size_mb = self._filepath.stat().st_size / (1024 * 1024)
+                                    if size_mb > MAX_PCAP_FILE_SIZE_MB:
+                                        logger.warning(f"PCAP 文件超过 {MAX_PCAP_FILE_SIZE_MB}MB 限制，停止写入")
+                                        self._error = f"PCAP 文件超过 {MAX_PCAP_FILE_SIZE_MB}MB 限制"
+                                        break
+                                except OSError:
+                                    pass
                     except queue.Empty:
                         continue
 

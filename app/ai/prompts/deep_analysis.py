@@ -1,56 +1,6 @@
-"""深度分析提示词模板"""
+"""Layer 2 — 可疑流逐包分析 + Layer 3 — 综合报告 提示词模板"""
 
-DEEP_LAYER1_TEMPLATE = """# 深度流量分析 — 宏观层面
-
-## 任务目标
-对完整的抓包数据进行系统性深度分析，识别所有潜在安全风险，并标记需要逐包分析的可疑流。
-
-## 完整统计数据
-{full_stats}
-
-## 所有流记录
-{all_flows}
-
-## 预处理检测到的异常
-{anomalies}
-
-## 用户关注方向
-{user_focus}
-
-## 分析维度（必须逐一覆盖）
-
-### 1. 攻击行为检测
-- **扫描行为**：同一源 IP 短时间内访问大量不同目标端口（SYN 扫描、Connect 扫描、UDP 扫描）
-- **暴力破解**：同一目标端口的短流高频连接（SSH、RDP、HTTP 登录）
-- **DDoS 特征**：大量不同源 IP 汇聚同一目标，或单一源的超大流量脉冲
-
-### 2. 数据泄露检测
-- **大流量外传**：内网 IP 向外部 IP 传输大量数据（尤其非标准端口或加密流量）
-- **DNS 隧道**：DNS 查询中异常长的子域名、高频 TXT/NULL 记录查询
-- **分块外传**：多个小流但总数据量可观，可能为规避检测的分片传输
-
-### 3. 横向移动检测
-- **内网扫描**：内网 IP 对其他内网 IP 的大量端口探测
-- **服务利用**：非管理源 IP 访问管理端口（445/SMB、3389/RDP、22/SSH）
-
-### 4. 协议异常检测
-- **非标准端口服务**：高端口运行业务服务，或标准服务运行在非标准端口
-- **TCP 异常**：异常 flag 组合、大量重传、零窗口、RST 风暴
-- **通信模式异常**：正常应该加密的协议却使用明文（HTTP 而非 HTTPS）
-
-### 5. 基线偏离检测
-- 流量规模是否显著偏离同类网络的典型范围
-- 协议分布是否存在异常比例（如 DNS 占比异常高）
-- 通信时间模式是否异常（如非工作时间的大量数据传输）
-
-## 输出要求
-
-1. 所有可疑流必须按置信度（从高到低）排列
-2. 每个可疑流必须标注 flow_id，并说明需要深入分析的原因
-3. 对于高置信度的安全问题，在 recommendation 中给出具体的处置步骤
-4. 如果用户指定了关注方向（非"全面分析"），在该方向上给出更深入的分析"""
-
-DEEP_LAYER2_TEMPLATE = """# 深度分析 — 单流逐包级分析
+LAYER2_TEMPLATE = """# 单流逐包级深度分析
 
 ## 任务目标
 对指定网络流进行逐包级精细分析，验证上层分析中标记的疑似异常，给出确定性结论。
@@ -65,7 +15,7 @@ DEEP_LAYER2_TEMPLATE = """# 深度分析 — 单流逐包级分析
 - 持续时间: {duration}s
 - TCP Flags: {flags}
 
-## 关键数据包（采样）
+## 该流的关键数据包（采样）
 {packets_detail}
 
 ## 上层分析上下文
@@ -74,34 +24,103 @@ DEEP_LAYER2_TEMPLATE = """# 深度分析 — 单流逐包级分析
 ## 逐包分析维度
 
 ### 1. 时序分析
-- 包间间隔模式是否正常（是否存在突发 burst、规律性心跳、长间隙）
-- 整体传输速率是否与协议/服务的预期匹配
+- 包间间隔模式是否正常（突发 burst、规律性心跳、长间隙）
+- 传输速率是否与协议/服务的预期匹配
 
 ### 2. 载荷分析
-- 是否存在明文敏感信息（密码、Token、内部 IP 地址）
-- 是否存在可疑的二进制载荷特征（exploit signature、shellcode 模式）
-- 数据传输方向是否合理（请求/响应比例是否符合协议特征）
+- 是否存在明文敏感信息（密码、Token、内部 IP）
+- 数据传输方向是否合理（请求/响应比例）
+- 是否存在可疑的应用层特征
 
 ### 3. 协议合规性
-- TCP 会话是否完整（有 SYN/SYN-ACK/FIN 或 RST）
-- 是否存在协议违规（如 HTTP 在非 HTTP 端口、畸形包头）
+- TCP 会话是否完整（SYN/SYN-ACK/FIN 或 RST）
+- 是否存在协议违规（如 HTTP 在非 HTTP 端口）
 - TLS/SSL 协商是否正常（如适用）
 
 ### 4. 行为判定
-- 基于以上分析，该流是「确认异常」还是「误报」还是「需更多信息」
-- 如果是误报，说明为什么预处理标记为异常但实际正常
+- 确认异常 / 误报 / 需更多信息
+- 如果是误报，说明原因
 
 ## 输出要求
 
-1. 给出明确的正常性评估结论（不要模棱两可）
+1. 给出明确的正常性评估结论
 2. 如确认异常，描述具体攻击类型或风险
 3. 引用原始数据包中的关键特征作为证据（引用具体包序号）
-4. 给出针对此流的具体处置建议（是阻断、限速、还是加入白名单）"""
+4. 严格输出 JSON，格式如下：
+
+{{
+  "flow_id": "当前流的 ID",
+  "verdict": "malicious|suspicious|benign|inconclusive",
+  "confidence": 0.0-1.0,
+  "issues": [
+    {{
+      "severity": "Critical|Warning|Info",
+      "category": "Security|Performance|Anomaly|Protocol",
+      "title": "问题标题",
+      "description": "详细分析：现象 → 证据（引用包序号） → 影响",
+      "recommendation": "处置步骤"
+    }}
+  ],
+  "evidence": ["关键证据列表"]
+}}"""
 
 
-def get_deep_layer1_template() -> str:
-    return DEEP_LAYER1_TEMPLATE
+LAYER3_TEMPLATE = """# 综合安全报告生成
+
+## 任务目标
+基于 Layer 1 全量分析和 Layer 2 可疑流逐包诊断结果，生成最终综合安全报告。
+
+## Layer 1 全量分析结果
+{layer1_result}
+
+## Layer 2 可疑流诊断结果
+{layer2_results}
+
+## 统计概览
+- 总包数: {total_packets}
+- 总流数: {total_flows}
+- 可疑流数: {suspicious_flow_count}
+- 确认异常流数: {confirmed_flow_count}
+
+## 输出要求
+
+生成一份结构化的综合安全报告，包含：
+
+1. **执行摘要**：一句话概括整体安全状况
+2. **关键发现**：按严重级别排列的所有确认问题
+3. **威胁图谱**：各威胁类型的分布和关联关系
+4. **受影响资产**：列出涉及的 IP 和服务
+5. **处置建议**：按优先级排列的具体操作步骤
+6. **监控建议**：需要持续关注的行为模式
+
+严格输出 JSON，格式如下：
+
+{{
+  "summary": "一句话执行摘要",
+  "risk_level": "Critical|High|Medium|Low|Normal",
+  "issues": [
+    {{
+      "severity": "Critical|Warning|Info",
+      "category": "Security|Performance|Anomaly|Protocol|Configuration",
+      "title": "问题标题",
+      "description": "综合分析描述",
+      "affected_flows": ["flow_id_1"],
+      "affected_ips": ["ip1", "ip2"],
+      "recommendation": "具体处置步骤"
+    }}
+  ],
+  "protocol_insights": {{
+    "tcp_analysis": "TCP 分析总结",
+    "udp_analysis": "UDP 分析总结",
+    "dns_analysis": "DNS 分析总结"
+  }},
+  "overall_assessment": "整体评估和下一步建议"
+}}"""
 
 
-def get_deep_layer2_template() -> str:
-    return DEEP_LAYER2_TEMPLATE
+def get_layer2_template() -> str:
+    return LAYER2_TEMPLATE
+
+
+def get_layer3_template() -> str:
+    return LAYER3_TEMPLATE

@@ -110,21 +110,38 @@ class AnalysisPanel(QWidget):
     def set_loading(self) -> None:
         """设置为加载状态"""
         self._summary_label.setText("AI 分析中...")
+        self._summary_label.setStyleSheet("font-size: 14px; padding: 8px;")
         self._stream_text = ""
         self._stream_output.clear()
         self._stream_output.show()
         self._stats_label.setText("")
         self._clear_cards()
 
+    def reset_from_error(self, error: str) -> None:
+        """分析出错后恢复面板可用状态"""
+        self._stream_output.hide()
+        self._summary_label.setText(f"分析失败: {error[:200]}")
+        self._summary_label.setStyleSheet("font-size: 14px; padding: 8px; color: #FF4444;")
+        self._stats_label.setText("")
+        if hasattr(self, '_deep_btn'):
+            self._deep_btn.setEnabled(True)
+        if hasattr(self, '_reanalyze_btn'):
+            self._reanalyze_btn.setEnabled(True)
+        self._stream_text = ""
+
     def update_progress(self, chunk: str) -> None:
-        """流式更新进度——完整显示，不做截断"""
+        """流式更新进度"""
         self._stream_text += chunk
-        # 仅在超出上限时裁剪前端（保留最新内容）
         if len(self._stream_text) > MAX_STREAM_CHARS:
             self._stream_text = "...[早期输出已省略]\n" + self._stream_text[-MAX_STREAM_CHARS:]
+            # 超限时才做全量重写（低频路径）
+            self._stream_output.setPlainText(self._stream_text)
+        else:
+            # 正常增量追加（高频路径，性能优）
+            cursor = self._stream_output.textCursor()
+            cursor.movePosition(cursor.End)
+            cursor.insertText(chunk)
 
-        self._stream_output.setPlainText(self._stream_text)
-        # 自动滚动到底部
         scrollbar = self._stream_output.verticalScrollBar()
         scrollbar.setValue(scrollbar.maximum())
 

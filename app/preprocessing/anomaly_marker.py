@@ -36,6 +36,8 @@ class AnomalyMarker:
         anomalies.extend(self._detect_port_scans(flows))
         anomalies.extend(self._detect_unusual_ports(flows))
         anomalies.extend(self._detect_large_transfers(flows))
+        anomalies.extend(self._detect_syn_flood(flows))
+        anomalies.extend(self._detect_dns_tunnel(flows))
 
         return anomalies
 
@@ -75,7 +77,7 @@ class AnomalyMarker:
         for flow in flows:
             if flow.dst_port < HIGH_PORT_THRESHOLD:
                 continue
-            if flow.byte_count <= 100_000:  # 100KB 阈值
+            if flow.byte_count <= 500_000:  # 500KB 阈值
                 continue
             if flow.protocol not in ("TCP", "UDP"):
                 continue
@@ -104,7 +106,7 @@ class AnomalyMarker:
         anomalies = []
 
         for flow in flows:
-            if flow.byte_count > 1_000_000:  # > 1MB
+            if flow.byte_count > 10_000_000:  # > 10MB
                 anomalies.append({
                     "type": "large_transfer",
                     "severity": "Info",
@@ -121,4 +123,60 @@ class AnomalyMarker:
                     },
                 })
 
+        return anomalies
+
+    def _detect_syn_flood(self, flows: list[FlowRecord]) -> list[dict]:
+        """检测 SYN Flood：同一目标 IP 收到大量 SYN-only 流"""
+        SYN_FLOOD_THRESHOLD = 50
+
+        target_syn: dict[str, list[FlowRecord]] = defaultdict(list)
+        for flow in flows:
+            if flow.protocol == "TCP" and "S" in flow.flags_set and "A" not in flow.flags_set:
+                if flow.packet_count <= 3:
+                    key = flow.dst_ip
+                    target_syn[key].append(flow)
+
+        anomalies = []
+        for dst_ip, syn_flows in target_syn.items():
+            if len(syn_flows) >= SYN_FLOOD_THRESHOLD:
+                sources = set(f.src_ip for f in syn_flows)
+                anomalies.append({
+                    "type": "syn_flood",
+                    "severity": "Critical",
+                    "description": f"疑似 SYN Flood: 目标 {dst_ip}, "
+                                   f"{len(syn_flows)} 条 SYN 流, 来自 {len(sources)} 个源 IP",
+                    "affected_flows": [f.flow_id for f in syn_flows[:50]],
+                    "detail": {
+                        "target_ip": dst_ip,
+                        "syn_flow_count": len(syn_flows),
+                        "unique_sources": len(sources),
+                        "sources_sample": sorted(sources)[:10],
+                    },
+                })
+        return anomalies
+
+    def _detect_dns_tunnel(self, flows: list[FlowRecord]) -> list[dict]:
+        """检测 DNS 隧道：高频 DNS 查询"""
+        DNS_TUNNEL_FLOW_THRESHOLD = 100
+
+        dns_flows_by_src: dict[str, list[FlowRecord]] = defaultdict(list)
+        for flow in flows:
+            if flow.service == "DNS" or (flow.dst_port == 53 and flow.protocol in ("TCP", "UDP")):
+                key = flow.src_ip
+                dns_flows_by_src[key].append(flow)
+
+        anomalies = []
+        for src_ip, dns_list in dns_flows_by_src.items():
+            if len(dns_list) >= DNS_TUNNEL_FLOW_THRESHOLD:
+                anomalies.append({
+                    "type": "dns_tunnel",
+                    "severity": "Warning",
+                    "description": f"疑似 DNS 隧道: {src_ip} 发起 {len(dns_list)} 条 DNS 流",
+                    "affected_flows": [f.flow_id for f in dns_list[:50]],
+                    "detail": {
+                        "source_ip": src_ip,
+                        "dns_flow_count": len(dns_list),
+                        "total_bytes": sum(f.byte_count for f in dns_list),
+                    },
+                })
         return anomalies

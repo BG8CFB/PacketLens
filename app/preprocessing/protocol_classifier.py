@@ -33,6 +33,18 @@ WELL_KNOWN_PORTS: dict[tuple[int, str], str] = {
     (8080, "TCP"): "HTTP-Alt",
     (8443, "TCP"): "TLS-Alt",
     (27017, "TCP"): "MongoDB",
+    # --- P2 增强：常见协议补充 ---
+    (443, "UDP"): "QUIC",
+    (5353, "UDP"): "mDNS",
+    (3478, "UDP"): "STUN",
+    (1900, "UDP"): "SSDP",
+    (51820, "UDP"): "WireGuard",
+    (137, "UDP"): "NetBIOS",
+    (138, "UDP"): "NetBIOS",
+    (427, "TCP"): "SLP",
+    (427, "UDP"): "SLP",
+    (1723, "TCP"): "PPTP",
+    (5222, "TCP"): "XMPP",
 }
 
 

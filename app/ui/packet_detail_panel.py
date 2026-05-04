@@ -8,8 +8,8 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QFont, QTextCharFormat, QColor
 from PySide6.QtWidgets import (
     QHeaderView,
-    QLabel,
     QSplitter,
+    QTextEdit,
     QTreeWidget,
     QTreeWidgetItem,
     QVBoxLayout,
@@ -17,6 +17,12 @@ from PySide6.QtWidgets import (
 )
 
 from app.models.packet_record import PacketRecord
+
+try:
+    from scapy.all import Ether, IP, TCP, UDP, ICMP, ARP, raw as scapy_raw
+    _SCAPY_AVAILABLE = True
+except ImportError:
+    _SCAPY_AVAILABLE = False
 
 logger = logging.getLogger(__name__)
 
@@ -44,14 +50,15 @@ class PacketDetailPanel(QWidget):
         self._tree.setAlternatingRowColors(True)
         splitter.addWidget(self._tree)
 
-        # Hex 视图
-        self._hex_label = QLabel("选择一个数据包查看详情")
-        self._hex_label.setFont(QFont("Consolas", 10))
-        self._hex_label.setWordWrap(True)
-        self._hex_label.setAlignment(Qt.AlignTop | Qt.AlignLeft)
-        self._hex_label.setStyleSheet("padding: 8px; background-color: #11111b;")
-        self._hex_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
-        splitter.addWidget(self._hex_label)
+        # Hex 视图（使用只读 QTextEdit，自带滚动条，不会无限撑高）
+        self._hex_view = QTextEdit()
+        self._hex_view.setReadOnly(True)
+        self._hex_view.setFont(QFont("Consolas", 10))
+        self._hex_view.setStyleSheet(
+            "QTextEdit { padding: 8px; background-color: #11111b; color: #cdd6f4; border: none; }"
+        )
+        self._hex_view.setPlainText("选择一个数据包查看详情")
+        splitter.addWidget(self._hex_view)
 
         splitter.setStretchFactor(0, 2)
         splitter.setStretchFactor(1, 1)
@@ -63,20 +70,22 @@ class PacketDetailPanel(QWidget):
         self._tree.clear()
 
         if packet is None:
-            self._hex_label.setText("选择一个数据包查看详情")
+            self._hex_view.setPlainText("选择一个数据包查看详情")
             return
 
         # 解析协议层
         self._parse_protocol_tree(packet)
 
         # 生成 Hex 视图
-        self._hex_label.setText(self._format_hex(packet.raw_bytes))
+        self._hex_view.setPlainText(self._format_hex(packet.raw_bytes))
 
     def _parse_protocol_tree(self, packet: PacketRecord) -> None:
         """从原始字节解析协议树"""
-        try:
-            from scapy.all import Ether, IP, TCP, UDP, ICMP, ARP, raw
+        if not _SCAPY_AVAILABLE:
+            logger.warning("Scapy 未安装，无法解析协议树")
+            return
 
+        try:
             # 重新解析原始包
             raw_bytes = packet.raw_bytes
             if not raw_bytes:

@@ -21,13 +21,14 @@ class AnalysisResultWidget(QWidget):
         self._issue = issue
         self._expanded = False
 
+        self.setCursor(Qt.PointingHandCursor)
         self.setStyleSheet(self._card_style())
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(12, 8, 12, 8)
         layout.setSpacing(4)
 
-        # 标题行：严重级别 + 分类 + 标题
+        # 标题行：严重级别 + 标题（始终可见）
         title_layout = QVBoxLayout()
 
         severity_color = SEVERITY_COLORS.get(issue.severity, "#CCCCCC")
@@ -47,18 +48,24 @@ class AnalysisResultWidget(QWidget):
 
         layout.addLayout(title_layout)
 
+        # 详情容器（初始隐藏）
+        self._detail_widget = QWidget()
+        detail_layout = QVBoxLayout(self._detail_widget)
+        detail_layout.setContentsMargins(0, 0, 0, 0)
+        detail_layout.setSpacing(4)
+
         # 描述
         desc = QLabel(issue.description)
         desc.setWordWrap(True)
         desc.setStyleSheet("color: #bac2de; font-size: 13px; border: none;")
-        layout.addWidget(desc)
+        detail_layout.addWidget(desc)
 
         # 建议（如果有）
         if issue.recommendation:
             rec_label = QLabel(f"建议: {issue.recommendation}")
             rec_label.setWordWrap(True)
             rec_label.setStyleSheet("color: #a6e3a1; font-size: 12px; border: none;")
-            layout.addWidget(rec_label)
+            detail_layout.addWidget(rec_label)
 
         # 受影响的流
         if issue.affected_flows:
@@ -67,7 +74,17 @@ class AnalysisResultWidget(QWidget):
                 flows_text += f" 等 {len(issue.affected_flows)} 个"
             flows_label = QLabel(flows_text)
             flows_label.setStyleSheet("color: #6c7086; font-size: 11px; border: none;")
-            layout.addWidget(flows_label)
+            detail_layout.addWidget(flows_label)
+
+        self._detail_widget.setVisible(False)
+        layout.addWidget(self._detail_widget)
+
+    def mousePressEvent(self, event):
+        """点击卡片切换展开/收起状态"""
+        if event.button() == Qt.LeftButton:
+            self._expanded = not self._expanded
+            self._detail_widget.setVisible(self._expanded)
+        super().mousePressEvent(event)
 
     def _card_style(self) -> str:
         severity_color = SEVERITY_COLORS.get(self._issue.severity, "#CCCCCC")

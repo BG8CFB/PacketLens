@@ -1,4 +1,4 @@
-"""AI Engine 真实测试 — 调用真实 API"""
+"""AI Engine 真实测试 — 调用真实 API（LangChain 版）"""
 
 import pytest
 
@@ -7,10 +7,9 @@ from app.ai.result_parser import ResultParser
 from app.storage.config_manager import ConfigManager
 
 
-def _get_active_api_config() -> dict:
+def _get_config() -> dict:
     """从 ConfigManager 获取当前激活 provider 的配置"""
-    config = ConfigManager()
-    return config.get_ai_config()
+    return ConfigManager().get_ai_config()
 
 
 class TestAIEngineConnection:
@@ -18,8 +17,9 @@ class TestAIEngineConnection:
 
     def test_connection_succeeds(self):
         """test_connection 应返回成功"""
-        cfg = _get_active_api_config()
+        cfg = _get_config()
         engine = AIEngine(
+            provider_type=cfg.get("provider_type", "openai"),
             api_key=cfg["api_key"],
             base_url=cfg["base_url"],
             model=cfg["model"],
@@ -30,8 +30,9 @@ class TestAIEngineConnection:
 
     def test_invalid_api_key_fails(self):
         """错误的 API Key 应返回失败"""
-        cfg = _get_active_api_config()
+        cfg = _get_config()
         engine = AIEngine(
+            provider_type=cfg.get("provider_type", "openai"),
             api_key="sk-invalid-key-12345",
             base_url=cfg["base_url"],
             model=cfg["model"],
@@ -46,8 +47,9 @@ class TestAIEngineAnalyze:
 
     def test_sync_analyze_returns_text(self):
         """同步分析应返回非空文本"""
-        cfg = _get_active_api_config()
+        cfg = _get_config()
         engine = AIEngine(
+            provider_type=cfg.get("provider_type", "openai"),
             api_key=cfg["api_key"],
             base_url=cfg["base_url"],
             model=cfg["model"],
@@ -62,8 +64,9 @@ class TestAIEngineAnalyze:
 
     def test_sync_analyze_with_network_data(self):
         """使用网络流量数据进行真实分析"""
-        cfg = _get_active_api_config()
+        cfg = _get_config()
         engine = AIEngine(
+            provider_type=cfg.get("provider_type", "openai"),
             api_key=cfg["api_key"],
             base_url=cfg["base_url"],
             model=cfg["model"],
@@ -81,12 +84,10 @@ class TestAIEngineAnalyze:
             max_tokens=200,
         )
         assert isinstance(result, str)
-        assert len(result) > 20  # 应该有实质内容
+        assert len(result) > 20
 
-        # 尝试解析结果
         parser = ResultParser()
         parsed = parser.parse(result)
-        # 即使解析失败，也应返回 AnalysisResult 对象
         assert parsed is not None
 
 
@@ -95,8 +96,9 @@ class TestAIEngineStream:
 
     def test_stream_analyze_collects_chunks(self):
         """流式分析应收集所有块"""
-        cfg = _get_active_api_config()
+        cfg = _get_config()
         engine = AIEngine(
+            provider_type=cfg.get("provider_type", "openai"),
             api_key=cfg["api_key"],
             base_url=cfg["base_url"],
             model=cfg["model"],
@@ -113,7 +115,6 @@ class TestAIEngineStream:
         assert isinstance(result, str)
         assert len(result) > 0
         assert len(chunks) > 0
-        # 拼接所有块应等于最终结果
         assert "".join(chunks) == result
 
 
@@ -121,18 +122,65 @@ class TestAIEngineLargeInput:
     """超长输入测试——验证 API 错误能被正确传播"""
 
     def test_oversized_prompt_raises_api_error(self):
-        """超长 prompt 应由 API 返回错误（不再做截断）"""
-        from openai import BadRequestError
-
-        cfg = _get_active_api_config()
+        """超长 prompt 应由 API 返回错误"""
+        cfg = _get_config()
         engine = AIEngine(
+            provider_type=cfg.get("provider_type", "openai"),
             api_key=cfg["api_key"],
             base_url=cfg["base_url"],
             model=cfg["model"],
         )
         long_prompt = "这是一段很长的数据。" * 50000  # ~30万字符
-        with pytest.raises(BadRequestError):
+        with pytest.raises(Exception) as exc_info:
             engine.analyze(
                 prompt=long_prompt,
                 max_tokens=10,
             )
+        error_msg = str(exc_info.value).lower()
+        assert "token" in error_msg or "context" in error_msg or "limit" in error_msg
+
+
+class TestAIEngineCloneForWorker:
+    """clone_for_worker 方法测试"""
+
+    def test_clone_preserves_config(self):
+        """clone_for_worker 应保留所有配置参数"""
+        cfg = _get_config()
+        engine = AIEngine(
+            provider_type=cfg.get("provider_type", "openai"),
+            api_key=cfg["api_key"],
+            base_url=cfg["base_url"],
+            model=cfg["model"],
+            max_tokens=2000,
+        )
+        clone = engine.clone_for_worker(max_tokens=1000)
+        assert clone._provider_type == engine._provider_type
+        assert clone._api_key == engine._api_key
+        assert clone._model == engine._model
+        assert clone._max_tokens == 1000
+
+    def test_clone_independent_llm_instance(self):
+        """clone 应创建独立的 LLM 实例"""
+        cfg = _get_config()
+        engine = AIEngine(
+            provider_type=cfg.get("provider_type", "openai"),
+            api_key=cfg["api_key"],
+            base_url=cfg["base_url"],
+            model=cfg["model"],
+        )
+        clone = engine.clone_for_worker()
+        assert clone._llm is not engine._llm
+
+    def test_clone_can_invoke_real_api(self):
+        """clone 的实例应能独立调用真实 API"""
+        cfg = _get_config()
+        engine = AIEngine(
+            provider_type=cfg.get("provider_type", "openai"),
+            api_key=cfg["api_key"],
+            base_url=cfg["base_url"],
+            model=cfg["model"],
+        )
+        clone = engine.clone_for_worker(max_tokens=20)
+        result = clone.analyze(prompt="1+1=?", max_tokens=10)
+        assert isinstance(result, str)
+        assert len(result) > 0

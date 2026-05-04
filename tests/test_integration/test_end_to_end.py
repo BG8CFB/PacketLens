@@ -307,7 +307,7 @@ class TestAIAnalysisPipeline:
 
         # 2. 构建提示词
         builder = PromptBuilder()
-        user_prompt, system_prompt = builder.build_quick_prompt(flows, stats, anomalies)
+        user_prompt, system_prompt = builder.build_layer1_prompt(flows, packets, stats, anomalies)
 
         assert len(user_prompt) > 100, "提示词应包含实质性内容"
         assert "30" in user_prompt, "提示词应包含总包数"
@@ -317,6 +317,7 @@ class TestAIAnalysisPipeline:
         from app.storage.config_manager import ConfigManager
         cfg = ConfigManager().get_ai_config()
         engine = AIEngine(
+            provider_type=cfg.get("provider_type", "openai"),
             api_key=cfg["api_key"],
             base_url=cfg["base_url"],
             model=cfg["model"],

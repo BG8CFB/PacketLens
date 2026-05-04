@@ -9,12 +9,12 @@ from pathlib import Path
 
 
 def is_npcap_installed() -> bool:
-    """检测 Npcap 是否已安装"""
-    # 检查 Npcap DLL 是否存在
+    """检测 Npcap 是否已安装（检查核心 DLL）"""
     system32 = Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32"
-    npcap_dir = system32 / "Npcap"
 
-    if npcap_dir.exists():
+    # 检查 Npcap 目录下的 wpcap.dll
+    npcap_dll = system32 / "Npcap" / "wpcap.dll"
+    if npcap_dll.exists():
         return True
 
     # 检查注册表（备选）

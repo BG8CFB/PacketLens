@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
 
 from app.ai.ai_engine import AIEngine
 from app.ai.analysis_worker import AnalysisWorker
+from app.ai.component_factory import create_ai_engine, create_prompt_builder, create_result_parser
 from app.ai.prompt_builder import PromptBuilder
 from app.ai.result_parser import ResultParser
 from app.capture.capture_engine import CaptureEngine
@@ -54,18 +55,9 @@ class MainWindow(QMainWindow):
 
         # AI 组件（从配置加载）
         ai_cfg = self._config.get_ai_config()
-        self._ai_engine = AIEngine(
-            api_key=ai_cfg["api_key"],
-            base_url=ai_cfg["base_url"],
-            model=ai_cfg["model"],
-            timeout=ai_cfg["timeout"],
-            context_window_tokens=ai_cfg["context_window_tokens"],
-            max_tokens=ai_cfg["max_tokens"],
-        )
-        self._prompt_builder = PromptBuilder(
-            context_window_tokens=ai_cfg["context_window_tokens"],
-        )
-        self._result_parser = ResultParser()
+        self._ai_engine = create_ai_engine(ai_cfg)
+        self._prompt_builder = create_prompt_builder(ai_cfg)
+        self._result_parser = create_result_parser()
         self._analysis_worker: AnalysisWorker | None = None
 
         # 抓包引擎
@@ -162,14 +154,8 @@ class MainWindow(QMainWindow):
         dialog = SettingsDialog(self._config, parent=self)
         if dialog.exec() == QDialog.Accepted:
             ai_cfg = self._config.get_ai_config()
-            self._ai_engine = AIEngine(
-                api_key=ai_cfg["api_key"],
-                base_url=ai_cfg["base_url"],
-                model=ai_cfg["model"],
-                timeout=ai_cfg["timeout"],
-                context_window_tokens=ai_cfg["context_window_tokens"],
-                max_tokens=ai_cfg["max_tokens"],
-            )
+            self._ai_engine = create_ai_engine(ai_cfg)
+            self._prompt_builder = create_prompt_builder(ai_cfg)
             self._status_bar.showMessage("配置已更新")
 
     def _init_nics(self) -> None:
@@ -207,12 +193,32 @@ class MainWindow(QMainWindow):
 
     # ── AI 分析 ──
 
+    def _cancel_active_worker(self) -> None:
+        """取消正在运行的 AI 分析 Worker"""
+        if self._analysis_worker is not None and self._analysis_worker.isRunning():
+            self._analysis_worker.requestInterruption()
+            try:
+                self._analysis_worker.analysis_completed.disconnect(self._on_analysis_completed)
+            except RuntimeError:
+                pass
+            try:
+                self._analysis_worker.analysis_error.disconnect(self._on_analysis_error)
+            except RuntimeError:
+                pass
+            try:
+                self._analysis_worker.analysis_progress.disconnect(self._on_analysis_progress)
+            except RuntimeError:
+                pass
+            self._analysis_worker.wait(3000)
+        self._analysis_worker = None
+
     def _start_quick_analysis(self) -> None:
         """启动快速 AI 分析"""
         if not self._engine.flows:
             self._status_bar.showMessage("没有抓包数据，无法分析")
             return
 
+        self._cancel_active_worker()
         self._analysis_panel.set_loading()
         self._bottom_tabs.setCurrentIndex(0)  # 切换到 AI 分析 Tab
         self._status_bar.showMessage("AI 快速分析中...")
@@ -229,6 +235,7 @@ class MainWindow(QMainWindow):
             packets=self._table_model.all_packets(),
             temperature=ai_cfg["temperature"],
             max_tokens=ai_cfg["max_tokens"],
+            max_concurrency=ai_cfg["max_concurrency"],
         )
         self._analysis_worker.analysis_progress.connect(self._on_analysis_progress)
         self._analysis_worker.analysis_completed.connect(self._on_analysis_completed)
@@ -236,11 +243,12 @@ class MainWindow(QMainWindow):
         self._analysis_worker.start()
 
     def _start_deep_analysis(self) -> None:
-        """启动深度 AI 分析"""
+        """启动深度 AI 分析（Layer 1 → 2 → 3）"""
         if not self._engine.flows:
             self._status_bar.showMessage("没有抓包数据，无法分析")
             return
 
+        self._cancel_active_worker()
         self._analysis_panel.set_loading()
         self._bottom_tabs.setCurrentIndex(0)
         self._status_bar.showMessage("AI 深度分析中...")
@@ -257,6 +265,7 @@ class MainWindow(QMainWindow):
             packets=self._table_model.all_packets(),
             temperature=ai_cfg["temperature"],
             max_tokens=ai_cfg["max_tokens"],
+            max_concurrency=ai_cfg["max_concurrency"],
         )
         self._analysis_worker.analysis_progress.connect(self._on_analysis_progress)
         self._analysis_worker.analysis_completed.connect(self._on_analysis_completed)
@@ -330,6 +339,7 @@ class MainWindow(QMainWindow):
         self._analysis_worker = None
 
     def _on_analysis_error(self, error: str) -> None:
+        self._analysis_panel.reset_from_error(error)
         self._status_bar.showMessage(f"AI 分析失败: {error[:100]}")
         self._analysis_worker = None
 
@@ -346,6 +356,8 @@ class MainWindow(QMainWindow):
     def closeEvent(self, event) -> None:
         if self._engine.is_capturing:
             self._engine.stop_capture()
+        if hasattr(self._engine, 'cleanup'):
+            self._engine.cleanup()
         if self._analysis_worker and self._analysis_worker.isRunning():
             self._analysis_worker.requestInterruption()
             self._analysis_worker.wait(5000)

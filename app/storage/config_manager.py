@@ -5,10 +5,12 @@ from __future__ import annotations
 import copy
 import json
 import logging
+import os
 from pathlib import Path
 
 from app.config.ai_defaults import AI_DEFAULTS
-from app.constants import load_builtin_provider
+from app.config.provider_loader import load_builtin_provider
+from app.config.provider_schema import ensure_provider_schema
 from app.utils.path_helpers import atomic_write, get_config_path
 
 logger = logging.getLogger(__name__)
@@ -42,6 +44,16 @@ class ConfigManager:
                 with open(self._path, "r", encoding="utf-8") as f:
                     self._config = json.load(f)
                 logger.info(f"配置已加载: {self._path}")
+            except json.JSONDecodeError as e:
+                backup_path = self._path.with_suffix(".json.corrupt")
+                logger.warning(f"配置文件损坏: {e}，备份至 {backup_path}")
+                try:
+                    import shutil
+                    shutil.copy2(str(self._path), str(backup_path))
+                except OSError:
+                    pass
+                self._config = DEFAULT_CONFIG.copy()
+                self.save()
             except Exception as e:
                 logger.warning(f"配置加载失败，使用默认值: {e}")
                 self._config = DEFAULT_CONFIG.copy()
@@ -49,7 +61,9 @@ class ConfigManager:
             self._config = DEFAULT_CONFIG.copy()
             self.save()
 
-        self._ensure_builtin_provider()
+        # Provider schema 升级（补全字段、清理旧字段、校验激活项）
+        if ensure_provider_schema(self._config):
+            self.save()
         return self._config
 
     def save(self) -> None:
@@ -106,8 +120,8 @@ class ConfigManager:
             builtin = load_builtin_provider()
             active = builtin if builtin else {}
 
-        import os
         return {
+            "provider_type": active.get("provider_type", AI_DEFAULTS["provider_type"]),
             "api_key": os.environ.get("PACKETLENS_API_KEY") or active.get("api_key", ""),
             "base_url": os.environ.get("PACKETLENS_API_BASE") or active.get("api_base", ""),
             "model": os.environ.get("PACKETLENS_MODEL") or active.get("model", ""),
@@ -115,61 +129,10 @@ class ConfigManager:
             "max_tokens": active.get("max_tokens", AI_DEFAULTS["max_tokens"]),
             "temperature": active.get("temperature", AI_DEFAULTS["temperature"]),
             "timeout": active.get("timeout", AI_DEFAULTS["timeout"]),
+            "max_concurrency": active.get("max_concurrency", AI_DEFAULTS["max_concurrency"]),
         }
 
     def set_providers(self, providers: list[dict], active_name: str) -> None:
         """保存 provider 列表和激活项"""
         self._config["ai_providers"] = providers
         self._config["ai_active_provider"] = active_name
-
-    def _ensure_builtin_provider(self) -> None:
-        """确保内置 provider 存在于列表中（如有 .env 配置），并补全新字段"""
-        dirty = False
-        providers = self._config.get("ai_providers", [])
-        builtin = load_builtin_provider()
-
-        if builtin:
-            # 按 name 匹配：如果已有同名 provider 则更新 is_default 标记和缺失字段
-            name = builtin["name"]
-            found = False
-            for p in providers:
-                if p["name"] == name:
-                    if not p.get("is_default"):
-                        p["is_default"] = True
-                        dirty = True
-                    # 补全新字段（向后兼容）
-                    for key in ("context_window_tokens", "max_tokens", "temperature", "timeout"):
-                        if key not in p:
-                            p[key] = AI_DEFAULTS[key]
-                            dirty = True
-                    found = True
-                    break
-            if not found:
-                providers.insert(0, copy.deepcopy(builtin))
-                self._config["ai_providers"] = providers
-                dirty = True
-
-        # 清理 active_name 引用
-        active = self._config.get("ai_active_provider", "")
-        names = {p["name"] for p in providers}
-        if not active or active not in names:
-            if providers:
-                self._config["ai_active_provider"] = providers[0]["name"]
-            else:
-                self._config["ai_active_provider"] = ""
-            dirty = True
-
-        # 清理旧字段名
-        for p in providers:
-            for key in ("context_window_tokens", "max_tokens", "temperature", "timeout"):
-                if key not in p:
-                    p[key] = AI_DEFAULTS[key]
-                    dirty = True
-            if "max_output_tokens" in p or "max_input_chars" in p:
-                p.pop("max_output_tokens", None)
-                p.pop("max_input_chars", None)
-                dirty = True
-
-        # 仅在有实际变更时持久化
-        if dirty:
-            self.save()

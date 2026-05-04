@@ -1,5 +1,6 @@
 """StatsComputer 单元测试"""
 
+from app.models.flow_record import FlowRecord
 from app.models.packet_record import PacketRecord
 from app.preprocessing.stats_computer import StatsComputer
 
@@ -24,6 +25,9 @@ class TestStatsComputer:
         assert result["avg_packet_size"] == 0.0
         assert result["duration"] == 0.0
         assert result["bandwidth_bps"] == 0.0
+        assert result["avg_flow_size"] == 0
+        assert result["top_flows"] == []
+        assert result["flow_size_median"] == 0
 
     def test_single_packet(self):
         computer = StatsComputer()
@@ -91,5 +95,16 @@ class TestStatsComputer:
     def test_total_flows(self):
         computer = StatsComputer()
         packets = [_make_pkt(0, "1.1.1.1", "2.2.2.2", "TCP", 100, 0.0)]
-        result = computer.compute([{"id": "f1"}, {"id": "f2"}, {"id": "f3"}], packets)
+        flows = [
+            FlowRecord(flow_id="f1", src_ip="1.1.1.1", dst_ip="2.2.2.2",
+                       src_port=1234, dst_port=80, protocol="TCP",
+                       packet_count=1, byte_count=100, first_seen=0.0, last_seen=1.0),
+            FlowRecord(flow_id="f2", src_ip="2.2.2.2", dst_ip="1.1.1.1",
+                       src_port=80, dst_port=1234, protocol="TCP",
+                       packet_count=1, byte_count=100, first_seen=0.0, last_seen=1.0),
+            FlowRecord(flow_id="f3", src_ip="1.1.1.1", dst_ip="3.3.3.3",
+                       src_port=5678, dst_port=443, protocol="TCP",
+                       packet_count=1, byte_count=200, first_seen=0.0, last_seen=1.0),
+        ]
+        result = computer.compute(flows, packets)
         assert result["total_flows"] == 3

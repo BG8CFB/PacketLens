@@ -65,7 +65,7 @@ class FlowTableModel(QAbstractTableModel):
     def set_flows(self, flows: list[FlowRecord]) -> None:
         """设置流数据"""
         self.beginResetModel()
-        self._flows = flows
+        self._flows = list(flows)
         self.endResetModel()
 
     def get_flow(self, row: int) -> FlowRecord | None:

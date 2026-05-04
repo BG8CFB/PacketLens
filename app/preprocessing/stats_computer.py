@@ -87,6 +87,23 @@ class StatsComputer:
         avg_pkt_size = total_bytes / total_packets if total_packets > 0 else 0.0
         bandwidth_bps = (total_bytes * 8) / duration if duration > 0 else 0.0
 
+        # 流级别统计
+        flow_sizes = [f.byte_count for f in flows] if flows else [0]
+        avg_flow_size = sum(flow_sizes) / len(flow_sizes) if flow_sizes else 0
+
+        top_flows_by_bytes = sorted(flows, key=lambda f: f.byte_count, reverse=True)[:5]
+        top_flows = [
+            {
+                "flow_id": f.flow_id,
+                "src": f"{f.src_ip}:{f.src_port}",
+                "dst": f"{f.dst_ip}:{f.dst_port}",
+                "protocol": f.protocol,
+                "bytes": f.byte_count,
+                "packets": f.packet_count,
+            }
+            for f in top_flows_by_bytes
+        ]
+
         return {
             "protocol_distribution": dict(protocol_dist.most_common()),
             "top_talkers_src": src_counter.most_common(10),
@@ -97,6 +114,9 @@ class StatsComputer:
             "avg_packet_size": round(avg_pkt_size, 1),
             "duration": round(duration, 2),
             "bandwidth_bps": round(bandwidth_bps, 0),
+            "avg_flow_size": round(avg_flow_size, 1),
+            "top_flows": top_flows,
+            "flow_size_median": sorted(flow_sizes)[len(flow_sizes) // 2] if flow_sizes else 0,
         }
 
     @staticmethod
@@ -111,4 +131,7 @@ class StatsComputer:
             "avg_packet_size": 0.0,
             "duration": 0.0,
             "bandwidth_bps": 0.0,
+            "avg_flow_size": 0,
+            "top_flows": [],
+            "flow_size_median": 0,
         }

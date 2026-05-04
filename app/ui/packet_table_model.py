@@ -6,7 +6,9 @@ import time
 from datetime import datetime
 
 from PySide6.QtCore import QAbstractTableModel, QModelIndex, Qt
+from PySide6.QtGui import QColor
 
+from app.constants import PROTOCOL_COLORS
 from app.models.packet_record import PacketRecord
 
 
@@ -54,9 +56,7 @@ class PacketTableModel(QAbstractTableModel):
             return Qt.AlignLeft | Qt.AlignVCenter
 
         if role == Qt.ForegroundRole:
-            from PySide6.QtGui import QColor
             if col == 4:
-                from app.constants import PROTOCOL_COLORS
                 color = PROTOCOL_COLORS.get(pkt.protocol, "#CCCCCC")
                 return QColor(color)
             return None

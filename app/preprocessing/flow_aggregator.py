@@ -16,6 +16,8 @@ from app.preprocessing.protocol_classifier import classify_service
 
 logger = logging.getLogger(__name__)
 
+MAX_EXPIRED_FLOWS = 10000
+
 
 class FlowAggregator:
     """五元组流聚合器
@@ -45,7 +47,9 @@ class FlowAggregator:
             # 检查流超时：如果距离 last_seen 超过阈值，归档旧流并创建新流
             timeout = self._get_timeout(packet.protocol)
             if timeout and (packet.timestamp - flow.last_seen) > timeout:
-                self._expired_flows.append(flow)
+                flow.flow_id = f"{flow.flow_id}_{int(flow.last_seen)}"
+                if len(self._expired_flows) < MAX_EXPIRED_FLOWS:
+                    self._expired_flows.append(flow)
                 self._flows[flow_key] = self._create_flow(flow_key, packet)
                 return
 

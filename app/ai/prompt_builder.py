@@ -1,4 +1,9 @@
-"""提示词构建器"""
+"""提示词构建器 — 三层渐进式架构
+
+Layer 1: 全量流量分析（全部流 + 每流 5 个采样包 + 统计 + 异常）
+Layer 2: 可疑流逐包深度分析（单流 + 更多包数据 + Layer1 上下文）
+Layer 3: 综合报告（汇总 Layer1 + Layer2 结果）
+"""
 
 from __future__ import annotations
 
@@ -7,21 +12,21 @@ import logging
 from collections import Counter
 
 from app.ai.prompts.system_prompt import get_system_prompt
-from app.ai.prompts.quick_analysis import get_quick_template
-from app.ai.prompts.deep_analysis import get_deep_layer1_template, get_deep_layer2_template
-from app.config.ai_defaults import AI_DEFAULTS, MAX_FLOWS_IN_PROMPT
+from app.ai.prompts.quick_analysis import get_layer1_template
+from app.ai.prompts.deep_analysis import get_layer2_template, get_layer3_template
+from app.config.ai_defaults import AI_DEFAULTS
 from app.models.flow_record import FlowRecord
 from app.models.packet_record import PacketRecord
 from app.preprocessing.protocol_classifier import classify_service
 
 logger = logging.getLogger(__name__)
 
+# Layer 1 每条流的固定采样包数（从配置读取）
+PACKETS_PER_FLOW_LAYER1 = AI_DEFAULTS["packets_per_flow_layer1"]
+
 
 class PromptBuilder:
-    """构建 AI 分析提示词
-
-    通过智能采样控制数据量，基于 token 预算动态调整采样数量。
-    """
+    """构建 AI 分析提示词"""
 
     def __init__(self, context_window_tokens: int | None = None):
         self._context_window_tokens = (
@@ -29,29 +34,23 @@ class PromptBuilder:
             else AI_DEFAULTS["context_window_tokens"]
         )
 
-    @staticmethod
-    def _estimate_tokens(text: str) -> int:
-        """粗略估算 token 数（保守估算约 2 字符/token）"""
-        return max(len(text) // 2, 1)
+    # ── Layer 1: 全量流量分析 ──
 
-    def _available_tokens_for_flows(self, system_prompt: str, stats_text: str) -> int:
-        """计算可用于流数据的 token 预算"""
-        used = self._estimate_tokens(system_prompt + stats_text)
-        return int(self._context_window_tokens * 0.6) - used
-
-    def build_quick_prompt(
+    def build_layer1_prompt(
         self,
         flows: list[FlowRecord],
+        packets: list[PacketRecord],
         stats: dict,
         anomalies: list[dict],
     ) -> tuple[str, str]:
-        """构建快速分析提示词
+        """构建 Layer 1 提示词（全部流 + 每流 5 个采样包）
 
         Returns:
             (user_prompt, system_prompt)
         """
         system = get_system_prompt()
 
+        # 统计数据格式化
         proto_dist = stats.get("protocol_distribution", {})
         proto_lines = [f"  {k}: {v} 包" for k, v in proto_dist.items()]
 
@@ -60,9 +59,6 @@ class PromptBuilder:
         src_lines = [f"  {ip}: {cnt} 包" for ip, cnt in top_src]
         dst_lines = [f"  {ip}: {cnt} 包" for ip, cnt in top_dst]
 
-        # Top 20 流（快速分析只看概要）
-        flow_lines = _format_flow_lines(flows[:20])
-
         anomaly_lines = []
         if anomalies:
             for a in anomalies:
@@ -70,7 +66,13 @@ class PromptBuilder:
         else:
             anomaly_lines.append("  未检测到明显异常")
 
-        user_prompt = get_quick_template().format(
+        # 每条流 + 采样包
+        flow_sections = []
+        for flow in flows:
+            section = _format_flow_with_packets(flow, packets, PACKETS_PER_FLOW_LAYER1)
+            flow_sections.append(section)
+
+        user_prompt = get_layer1_template().format(
             total_packets=stats.get("total_packets", 0),
             total_bytes=stats.get("total_bytes", 0),
             total_flows=stats.get("total_flows", 0),
@@ -79,81 +81,27 @@ class PromptBuilder:
             protocol_distribution="\n".join(proto_lines) or "无数据",
             top_src="\n".join(src_lines) or "无数据",
             top_dst="\n".join(dst_lines) or "无数据",
-            flow_summary="\n".join(flow_lines) or "无数据",
             anomaly_summary="\n".join(anomaly_lines),
+            all_flows_with_packets="\n".join(flow_sections),
         )
 
-        return user_prompt, system
-
-    def build_deep_layer1_prompt(
-        self,
-        flows: list[FlowRecord],
-        stats: dict,
-        anomalies: list[dict],
-        user_focus: str = "",
-    ) -> tuple[str, str]:
-        """构建深度分析 Layer 1 提示词
-
-        智能采样：优先按 token 预算动态调整，回退到数量限制。
-        """
-        system = get_system_prompt()
-        stats_text = json.dumps(stats, ensure_ascii=False, indent=2)
-        budget = self._available_tokens_for_flows(system, stats_text)
-
-        if budget <= 0:
-            budget = 1000  # 最小预算兜底
-
-        # 按 token 预算动态采样流数据
-        all_flow_lines = []
-        used_tokens = 0
-        max_flows = min(len(flows), MAX_FLOWS_IN_PROMPT)
-
-        for flow in flows[:max_flows]:
-            line = _format_flow_line(flow, detailed=True)
-            line_tokens = self._estimate_tokens(line)
-            if used_tokens + line_tokens > budget:
-                break
-            all_flow_lines.append(line)
-            used_tokens += line_tokens
-
-        # 生成剩余流摘要
-        sampled_count = len(all_flow_lines)
-        summary_suffix = ""
-        if len(flows) > sampled_count:
-            remaining = flows[sampled_count:]
-            rem_proto = Counter(f.protocol for f in remaining)
-            rem_bytes = sum(f.byte_count for f in remaining)
-            rem_pkts = sum(f.packet_count for f in remaining)
-            summary_suffix = (
-                f"\n\n### 剩余 {len(remaining)} 条流摘要（已省略详情）\n"
-                f"- 总包数: {rem_pkts}, 总字节: {rem_bytes}\n"
-                f"- 协议分布: {', '.join(f'{k}: {v}' for k, v in rem_proto.most_common())}"
-            )
-
-        anomaly_lines = [f"  [{a['severity']}] {a['type']}: {a['description']}" for a in anomalies]
-
-        user_prompt = get_deep_layer1_template().format(
-            full_stats=json.dumps(stats, ensure_ascii=False, indent=2),
-            all_flows="\n".join(all_flow_lines),
-            anomalies="\n".join(anomaly_lines) or "无",
-            user_focus=user_focus or "全面分析",
-        ) + summary_suffix
-
         logger.info(
-            f"Deep Layer1 prompt: {len(flows)} 条流, "
-            f"已采样 {min(len(flows), MAX_FLOWS_IN_PROMPT)} 条, "
+            f"Layer1 prompt: {len(flows)} 条流, "
+            f"每流 {PACKETS_PER_FLOW_LAYER1} 包采样, "
             f"prompt 长度 {len(user_prompt)} 字符"
         )
 
         return user_prompt, system
 
-    def build_deep_layer2_prompt(
+    # ── Layer 2: 单流逐包分析 ──
+
+    def build_layer2_prompt(
         self,
         flow: FlowRecord,
         packets: list[PacketRecord],
         context: str = "",
     ) -> tuple[str, str]:
-        """构建深度分析 Layer 2 提示词（单流）"""
+        """构建 Layer 2 提示词（单流深度分析）"""
         system = get_system_prompt()
 
         relevant_packets = _select_relevant_packets(packets, flow, max_packets=50)
@@ -165,7 +113,7 @@ class PromptBuilder:
                 f"[{p.protocol}] len={p.length} {p.info}"
             )
 
-        user_prompt = get_deep_layer2_template().format(
+        user_prompt = get_layer2_template().format(
             flow_id=flow.flow_id,
             src_ip=flow.src_ip,
             src_port=flow.src_port,
@@ -182,45 +130,78 @@ class PromptBuilder:
 
         return user_prompt, system
 
+    # ── Layer 3: 综合报告 ──
 
-def _format_flow_line(
+    def build_layer3_prompt(
+        self,
+        layer1_raw: str,
+        layer2_results: list[str],
+        stats: dict,
+        suspicious_flow_count: int,
+        confirmed_flow_count: int,
+    ) -> tuple[str, str]:
+        """构建 Layer 3 综合报告提示词"""
+        system = get_system_prompt()
+
+        layer2_combined = "\n\n---\n\n".join(layer2_results) if layer2_results else "无可疑流需要深度分析"
+
+        user_prompt = get_layer3_template().format(
+            layer1_result=layer1_raw[:8000],  # 限制 Layer1 结果长度避免过大
+            layer2_results=layer2_combined[:12000],  # 限制 Layer2 结果总长度
+            total_packets=stats.get("total_packets", 0),
+            total_flows=stats.get("total_flows", 0),
+            suspicious_flow_count=suspicious_flow_count,
+            confirmed_flow_count=confirmed_flow_count,
+        )
+
+        return user_prompt, system
+
+
+# ── 格式化工具函数 ──
+
+def _format_flow_with_packets(
     flow: FlowRecord,
-    detailed: bool = False,
+    packets: list[PacketRecord],
+    max_packets: int,
 ) -> str:
-    """格式化单条流记录为文本行"""
+    """格式化单条流记录 + 采样包"""
     svc = flow.service or classify_service(flow.src_port, flow.dst_port, flow.protocol)
     svc_tag = f" [{svc}]" if svc else ""
-    if detailed:
-        return (
-            f"  [{flow.flow_id}] {flow.src_ip}:{flow.src_port} -> "
-            f"{flow.dst_ip}:{flow.dst_port} ({flow.protocol}) "
-            f"{flow.packet_count}包 {flow.byte_count}B dur={flow.duration:.2f}s "
-            f"flags={','.join(flow.flags_set) or '-'}"
-            f"{svc_tag}"
-        )
-    return (
-        f"  [{flow.flow_id}] {flow.src_ip}:{flow.src_port} -> "
+
+    # 流摘要行
+    header = (
+        f"### 流 [{flow.flow_id}] {flow.src_ip}:{flow.src_port} -> "
         f"{flow.dst_ip}:{flow.dst_port} ({flow.protocol}) "
-        f"{flow.packet_count}包 {flow.byte_count}B "
-        f"flags={','.join(flow.flags_set) or '-'}"
-        f"{svc_tag}"
+        f"{flow.packet_count}包 {flow.byte_count}B dur={flow.duration:.2f}s "
+        f"flags={','.join(flow.flags_set) or '-'}{svc_tag}"
     )
 
+    # 选择属于该流的包
+    flow_pkts = _select_relevant_packets(packets, flow, max_packets=max_packets)
 
-def _format_flow_lines(
-    flows: list[FlowRecord],
-    detailed: bool = False,
-) -> list[str]:
-    """格式化流记录为文本行"""
-    return [_format_flow_line(f, detailed) for f in flows]
+    pkt_lines = []
+    for p in flow_pkts:
+        pkt_lines.append(
+            f"  #{p.index} {p.src_ip}:{p.src_port} -> {p.dst_ip}:{p.dst_port} "
+            f"[{p.protocol}] len={p.length} {p.info}"
+        )
+
+    pkt_section = "\n".join(pkt_lines)
+    if not pkt_section:
+        pkt_section = "  （无可用包数据）"
+
+    return f"{header}\n{pkt_section}"
 
 
 def _select_relevant_packets(
     packets: list[PacketRecord],
     flow: FlowRecord,
-    max_packets: int = 50,
+    max_packets: int = 5,
 ) -> list[PacketRecord]:
-    """选择属于指定流的关键包"""
+    """选择属于指定流的关键包
+
+    采样策略：前2（握手/请求）+ 中间均匀采样 + 后2（结束/异常）
+    """
     flow_pkts = [
         p for p in packets
         if _packet_matches_flow(p, flow)
@@ -229,11 +210,30 @@ def _select_relevant_packets(
     if len(flow_pkts) <= max_packets:
         return flow_pkts
 
-    # 取前半（握手/初始）+ 后半（结束/异常）
-    half = max_packets // 2
-    head = flow_pkts[:half]
-    tail = flow_pkts[-half:]
-    return head + tail
+    if max_packets <= 4:
+        # 包数很少时直接取前N个
+        return flow_pkts[:max_packets]
+
+    head_count = 2
+    tail_count = 2
+    mid_count = max_packets - head_count - tail_count
+
+    head = flow_pkts[:head_count]
+    tail = flow_pkts[-tail_count:]
+
+    # 中间均匀采样
+    mid_start = head_count
+    mid_end = len(flow_pkts) - tail_count
+    mid_range = mid_end - mid_start
+
+    if mid_count <= 0 or mid_range <= 0:
+        return head + tail
+
+    step = max(mid_range // mid_count, 1)
+    mid = [flow_pkts[mid_start + i * step] for i in range(mid_count)
+           if mid_start + i * step < mid_end]
+
+    return head + mid + tail
 
 
 def _packet_matches_flow(pkt: PacketRecord, flow: FlowRecord) -> bool:
