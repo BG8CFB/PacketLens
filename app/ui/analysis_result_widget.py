@@ -22,6 +22,8 @@ class AnalysisResultWidget(QWidget):
         self._expanded = False
 
         self.setCursor(Qt.PointingHandCursor)
+        # 使用 objectName 精确匹配样式，避免影响子 QWidget
+        self.setObjectName("analysisCard")
         self.setStyleSheet(self._card_style())
 
         layout = QVBoxLayout(self)
@@ -88,8 +90,9 @@ class AnalysisResultWidget(QWidget):
 
     def _card_style(self) -> str:
         severity_color = SEVERITY_COLORS.get(self._issue.severity, "#CCCCCC")
+        # 使用 #objectName 选择器，精确匹配卡片本身，不影响子 QWidget
         return (
-            f"QWidget {{"
+            f"QWidget#analysisCard {{"
             f"  background-color: #1e1e2e;"
             f"  border-left: 4px solid {severity_color};"
             f"  border-top: 1px solid #313244;"

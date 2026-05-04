@@ -6,9 +6,12 @@
 
 from __future__ import annotations
 
+import logging
 import os
 
 from app.config.ai_defaults import AI_DEFAULTS
+
+logger = logging.getLogger(__name__)
 
 
 def _safe_int(val, default: int) -> int:
@@ -30,7 +33,7 @@ def _safe_float(val, default: float) -> float:
 # 缓存哨兵：区分"未加载"与"已确认无 provider"
 _NOT_LOADED = object()
 # 内置 provider 缓存（首次调用后缓存，避免重复扫描环境变量）
-_builtin_provider_cache: dict | None = _NOT_LOADED
+_builtin_provider_cache: dict | None = _NOT_LOADED  # type: ignore[assignment]
 
 
 def load_builtin_provider() -> dict | None:
@@ -47,7 +50,11 @@ def load_builtin_provider() -> dict | None:
         return _builtin_provider_cache
 
     name = os.environ.get("AI_NAME", "").strip()
-    if not name:
+    api_key = os.environ.get("AI_API_KEY", "").strip()
+    model = os.environ.get("AI_MODEL", "").strip()
+    if not name or not api_key or not model:
+        # 三项必填：名称、密钥、模型，缺少任意一项均视为未配置
+        logger.debug("内置 Provider 环境变量不完整（需要 AI_NAME, AI_API_KEY, AI_MODEL）")
         _builtin_provider_cache = None
         return None
 
@@ -55,8 +62,8 @@ def load_builtin_provider() -> dict | None:
         "name": name,
         "provider_type": os.environ.get("AI_PROVIDER_TYPE", "openai").strip(),
         "api_base": os.environ.get("AI_API_BASE", "").strip(),
-        "api_key": os.environ.get("AI_API_KEY", "").strip(),
-        "model": os.environ.get("AI_MODEL", "").strip(),
+        "api_key": api_key,
+        "model": model,
         "context_window_tokens": _safe_int(
             os.environ.get("AI_CONTEXT_WINDOW") or AI_DEFAULTS["context_window_tokens"],
             AI_DEFAULTS["context_window_tokens"],
@@ -68,6 +75,10 @@ def load_builtin_provider() -> dict | None:
         "temperature": _safe_float(
             os.environ.get("AI_TEMPERATURE") or AI_DEFAULTS["temperature"],
             AI_DEFAULTS["temperature"],
+        ),
+        "max_input_chars": _safe_int(
+            os.environ.get("AI_MAX_INPUT_CHARS") or AI_DEFAULTS["max_input_chars"],
+            AI_DEFAULTS["max_input_chars"],
         ),
         "timeout": _safe_int(
             os.environ.get("AI_TIMEOUT") or AI_DEFAULTS["timeout"],

@@ -57,6 +57,7 @@ def atomic_write(path: Path, content: str, encoding: str = "utf-8") -> None:
     """原子写入文件：先写临时文件，再 os.replace() 替换
 
     os.replace() 在 POSIX 和 Windows 上都是原子操作。
+    写入失败时确保关闭文件描述符并清理临时文件。
     """
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -72,6 +73,11 @@ def atomic_write(path: Path, content: str, encoding: str = "utf-8") -> None:
             os.fsync(f.fileno())
         os.replace(tmp_path, str(path))
     except BaseException:
+        # 确保关闭 fd（os.fdopen 可能尚未执行时 fd 仍打开）
+        try:
+            os.close(fd)
+        except OSError:
+            pass
         try:
             os.unlink(tmp_path)
         except OSError:

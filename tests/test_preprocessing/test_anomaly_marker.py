@@ -639,3 +639,80 @@ class TestAnomalyStructure:
         assert "detail" in a
         assert isinstance(a["affected_flows"], list)
         assert isinstance(a["detail"], dict)
+
+
+# ── 边界条件与特殊场景 ──────────────────────────────────
+
+
+class TestEdgeCases:
+
+    def test_single_flow_no_anomalies(self):
+        """单条正常流不应产生任何异常"""
+        marker = AnomalyMarker()
+        flows = [
+            _make_flow("f1", "10.0.0.1", "10.0.0.2", 12345, 443, "TCP",
+                        packet_count=100, byte_count=50000),
+        ]
+        assert marker.mark(flows) == []
+
+    def test_syn_flood_with_mixed_flags_correctly_filtered(self):
+        """混合 flags 的流中，只有纯 SYN 流（无 ACK）参与 SYN Flood 检测"""
+        marker = AnomalyMarker()
+        flows = []
+        # 30 条纯 SYN 流（flags_set={"S"}）
+        for i in range(30):
+            flows.append(
+                _make_flow(f"syn{i}", "192.168.1.100", "10.0.0.1",
+                            40000 + i, 80, "TCP",
+                            packet_count=1, byte_count=60,
+                            flags_set={"S"})
+            )
+        # 30 条 SYN+ACK 流（flags_set={"S", "A"}）不应参与
+        for i in range(30):
+            flows.append(
+                _make_flow(f"synack{i}", "10.0.0.1", "192.168.1.100",
+                            80, 40000 + i, "TCP",
+                            packet_count=1, byte_count=60,
+                            flags_set={"S", "A"})
+            )
+        result = marker.mark(flows)
+        syn_alerts = [a for a in result if a["type"] == "syn_flood"]
+        # 只有 30 条纯 SYN 流，未达 50 阈值
+        assert len(syn_alerts) == 0
+
+    def test_large_transfer_exactly_at_boundary(self):
+        """恰好 10MB（等于阈值）不触发 large_transfer"""
+        marker = AnomalyMarker()
+        flows = [
+            _make_flow("f1", "10.0.0.1", "10.0.0.2", 12345, 443, "TCP",
+                        byte_count=10_000_000),
+        ]
+        result = marker.mark(flows)
+        large = [a for a in result if a["type"] == "large_transfer"]
+        assert len(large) == 0
+
+    def test_port_scan_icmp_not_detected(self):
+        """ICMP 协议流不参与端口扫描检测"""
+        marker = AnomalyMarker()
+        flows = [
+            _make_flow(f"f{i}", "192.168.1.100", "10.0.0.1",
+                        0, 0, "ICMP", packet_count=1, byte_count=40)
+            for i in range(PORT_SCAN_THRESHOLD + 5)
+        ]
+        result = marker.mark(flows)
+        scan_alerts = [a for a in result if a["type"] == "port_scan"]
+        assert len(scan_alerts) == 0
+
+    def test_empty_flags_set_not_counted_as_syn_flood(self):
+        """空 flags_set 的 TCP 流不参与 SYN Flood 检测"""
+        marker = AnomalyMarker()
+        flows = [
+            _make_flow(f"f{i}", "192.168.1.100", "10.0.0.1",
+                        40000 + i, 80, "TCP",
+                        packet_count=1, byte_count=60,
+                        flags_set=set())
+            for i in range(60)
+        ]
+        result = marker.mark(flows)
+        syn_alerts = [a for a in result if a["type"] == "syn_flood"]
+        assert len(syn_alerts) == 0

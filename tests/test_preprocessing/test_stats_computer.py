@@ -15,6 +15,19 @@ def _make_pkt(index, src_ip, dst_ip, protocol, length, timestamp):
     )
 
 
+def _make_flow(flow_id, src_ip, dst_ip, src_port, dst_port, protocol,
+               packet_count=1, byte_count=100, first_seen=0.0, last_seen=1.0):
+    return FlowRecord(
+        flow_id=flow_id,
+        src_ip=src_ip, dst_ip=dst_ip,
+        src_port=src_port, dst_port=dst_port,
+        protocol=protocol,
+        packet_count=packet_count,
+        byte_count=byte_count,
+        first_seen=first_seen, last_seen=last_seen,
+    )
+
+
 class TestStatsComputer:
 
     def test_empty_packets(self):
@@ -25,9 +38,9 @@ class TestStatsComputer:
         assert result["avg_packet_size"] == 0.0
         assert result["duration"] == 0.0
         assert result["bandwidth_bps"] == 0.0
-        assert result["avg_flow_size"] == 0
+        assert result["avg_flow_size"] == 0.0
         assert result["top_flows"] == []
-        assert result["flow_size_median"] == 0
+        assert result["flow_size_median"] == 0.0
 
     def test_single_packet(self):
         computer = StatsComputer()
@@ -108,3 +121,137 @@ class TestStatsComputer:
         ]
         result = computer.compute(flows, packets)
         assert result["total_flows"] == 3
+
+
+class TestStatsComputerMedian:
+    """中位数计算专项测试"""
+
+    def test_median_odd_count(self):
+        """奇数个流：中位数为中间值"""
+        computer = StatsComputer()
+        flows = [
+            _make_flow(f"f{i}", "10.0.0.1", "10.0.0.2", 80, 443, "TCP",
+                       byte_count=100 * (i + 1))
+            for i in range(5)
+        ]
+        result = computer.compute(flows, [])
+        # byte_counts = [100, 200, 300, 400, 500], median = 300
+        assert result["flow_size_median"] == 300.0
+
+    def test_median_even_count(self):
+        """偶数个流：中位数为中间两个的平均值"""
+        computer = StatsComputer()
+        flows = [
+            _make_flow(f"f{i}", "10.0.0.1", "10.0.0.2", 80, 443, "TCP",
+                       byte_count=100 * (i + 1))
+            for i in range(4)
+        ]
+        result = computer.compute(flows, [])
+        # byte_counts = [100, 200, 300, 400], median = (200 + 300) / 2 = 250.0
+        assert result["flow_size_median"] == 250.0
+
+    def test_median_single_flow(self):
+        """单条流：中位数为自身"""
+        computer = StatsComputer()
+        flows = [
+            _make_flow("f1", "10.0.0.1", "10.0.0.2", 80, 443, "TCP",
+                       byte_count=500),
+        ]
+        result = computer.compute(flows, [])
+        assert result["flow_size_median"] == 500.0
+
+    def test_median_empty_flows(self):
+        """空流列表：中位数为 0"""
+        computer = StatsComputer()
+        result = computer.compute([], [])
+        assert result["flow_size_median"] == 0.0
+
+    def test_median_two_flows(self):
+        """两条流：中位数为两者的平均值"""
+        computer = StatsComputer()
+        flows = [
+            _make_flow("f1", "10.0.0.1", "10.0.0.2", 80, 443, "TCP",
+                       byte_count=100),
+            _make_flow("f2", "10.0.0.1", "10.0.0.2", 80, 443, "TCP",
+                       byte_count=200),
+        ]
+        result = computer.compute(flows, [])
+        assert result["flow_size_median"] == 150.0
+
+    def test_median_unsorted_input(self):
+        """无序输入：应先排序再计算中位数"""
+        computer = StatsComputer()
+        flows = [
+            _make_flow("f1", "10.0.0.1", "10.0.0.2", 80, 443, "TCP", byte_count=500),
+            _make_flow("f2", "10.0.0.1", "10.0.0.2", 80, 443, "TCP", byte_count=100),
+            _make_flow("f3", "10.0.0.1", "10.0.0.2", 80, 443, "TCP", byte_count=300),
+        ]
+        result = computer.compute(flows, [])
+        # sorted = [100, 300, 500], median = 300.0
+        assert result["flow_size_median"] == 300.0
+
+
+class TestStatsComputerEdgeCases:
+    """边界条件测试"""
+
+    def test_avg_flow_size_with_flows(self):
+        """有流时 avg_flow_size 应正确计算"""
+        computer = StatsComputer()
+        flows = [
+            _make_flow("f1", "10.0.0.1", "10.0.0.2", 80, 443, "TCP", byte_count=100),
+            _make_flow("f2", "10.0.0.1", "10.0.0.2", 80, 443, "TCP", byte_count=300),
+        ]
+        result = computer.compute(flows, [])
+        assert result["avg_flow_size"] == 200.0
+
+    def test_avg_flow_size_empty_flows(self):
+        """空流列表时 avg_flow_size 应为 0"""
+        computer = StatsComputer()
+        packets = [_make_pkt(0, "10.0.0.1", "10.0.0.2", "TCP", 100, 0.0)]
+        result = computer.compute([], packets)
+        assert result["avg_flow_size"] == 0.0
+
+    def test_top_flows_capped_at_5(self):
+        """top_flows 最多返回 5 条"""
+        computer = StatsComputer()
+        flows = [
+            _make_flow(f"f{i}", "10.0.0.1", "10.0.0.2", 80, 443, "TCP",
+                       byte_count=100 * (i + 1))
+            for i in range(10)
+        ]
+        result = computer.compute(flows, [])
+        assert len(result["top_flows"]) == 5
+        # 应按 byte_count 降序
+        assert result["top_flows"][0]["bytes"] == 1000
+        assert result["top_flows"][4]["bytes"] == 600
+
+    def test_compute_from_counters_empty(self):
+        """compute_from_counters 空数据应返回空统计"""
+        computer = StatsComputer()
+        from collections import Counter
+        result = computer.compute_from_counters(
+            flows=[], protocol_dist=Counter(),
+            src_counter=Counter(), dst_counter=Counter(),
+            total_packets=0, total_bytes=0,
+            first_ts=None, last_ts=None,
+        )
+        assert result["total_packets"] == 0
+        assert result["total_bytes"] == 0
+
+    def test_compute_from_counters_with_data(self):
+        """compute_from_counters 应正确计算"""
+        computer = StatsComputer()
+        from collections import Counter
+        result = computer.compute_from_counters(
+            flows=[_make_flow("f1", "10.0.0.1", "10.0.0.2", 80, 443, "TCP",
+                              byte_count=500)],
+            protocol_dist=Counter({"TCP": 10, "UDP": 5}),
+            src_counter=Counter({"10.0.0.1": 10}),
+            dst_counter=Counter({"10.0.0.2": 10}),
+            total_packets=15, total_bytes=1500,
+            first_ts=100.0, last_ts=110.0,
+        )
+        assert result["total_packets"] == 15
+        assert result["total_bytes"] == 1500
+        assert result["duration"] == 10.0
+        assert result["bandwidth_bps"] == 1200.0  # 1500 * 8 / 10

@@ -58,6 +58,7 @@ LAYER2_TEMPLATE = """# 单流逐包级深度分析
       "category": "Security|Performance|Anomaly|Protocol",
       "title": "问题标题",
       "description": "详细分析：现象 → 证据（引用包序号） → 影响",
+      "affected_flows": ["当前流的 flow_id"],
       "recommendation": "处置步骤"
     }}
   ],

@@ -93,7 +93,7 @@ class TestPCAPWriter:
         assert 1 in protocols   # ICMP
 
     def test_writer_handles_empty_queue(self, tmp_path):
-        """队列为空时正常停止"""
+        """队列为空时正常停止，不崩溃且计数器为 0"""
         pcap_file = tmp_path / "test_empty.pcap"
         q = queue.Queue()
         writer = PCAPWriter(pcap_file, q)
@@ -101,8 +101,14 @@ class TestPCAPWriter:
         writer.start()
         writer.stop(timeout=5)
 
-        # 文件可能不存在或为空（无包写入），不应崩溃即可
-        assert True
+        # 验证：不崩溃、计数器为 0、无错误
+        assert writer.total_written == 0
+        assert writer.error is None
+        # 文件可能被创建但为空 PCAP 头（24 字节），或因无包而未写入
+        if pcap_file.exists():
+            # 即使创建了文件，也应是空的 PCAP（无数据包记录）
+            read_pkts = rdpcap(str(pcap_file))
+            assert len(read_pkts) == 0
 
     def test_total_written_counter(self, tmp_path):
         """验证 total_written 计数正确"""

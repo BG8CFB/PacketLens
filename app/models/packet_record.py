@@ -105,6 +105,44 @@ class PacketRecord:
             summary=summary,
         )
 
+    def to_dict(self) -> dict:
+        """序列化为字典（raw_bytes 以 hex 字符串形式存储）"""
+        return {
+            "index": self.index,
+            "timestamp": self.timestamp,
+            "src_ip": self.src_ip,
+            "dst_ip": self.dst_ip,
+            "src_port": self.src_port,
+            "dst_port": self.dst_port,
+            "protocol": self.protocol,
+            "length": self.length,
+            "info": self.info,
+            "raw_bytes": self.raw_bytes.hex(),
+            "ttl": self.ttl,
+            "flags": self.flags,
+            "summary": self.summary,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> PacketRecord:
+        """从字典反序列化（raw_bytes 从 hex 字符串还原）"""
+        raw_hex = data.get("raw_bytes", "")
+        return cls(
+            index=data.get("index", 0),
+            timestamp=data.get("timestamp", 0.0),
+            src_ip=data.get("src_ip", ""),
+            dst_ip=data.get("dst_ip", ""),
+            src_port=data.get("src_port"),
+            dst_port=data.get("dst_port"),
+            protocol=data.get("protocol", "Other"),
+            length=data.get("length", 0),
+            info=data.get("info", ""),
+            raw_bytes=bytes.fromhex(raw_hex) if raw_hex else b"",
+            ttl=data.get("ttl"),
+            flags=data.get("flags"),
+            summary=data.get("summary", ""),
+        )
+
 
 def _tcp_info(tcp) -> str:
     """生成 TCP 层信息摘要"""
@@ -134,15 +172,46 @@ def _safe_decode(data, max_len: int = 200) -> str:
         return ""
 
 
+def _match_port(
+    dst_port: int | None,
+    src_port: int | None,
+    port_groups: list[tuple[int, ...]],
+) -> int:
+    """在 src_port 和 dst_port 中查找匹配的已知端口
+
+    优先匹配 dst_port（客户端→服务器方向更常见），
+    若不匹配则检查 src_port（捕获服务器响应）。
+    返回匹配到的端口号，未匹配返回 0。
+    """
+    for group in port_groups:
+        if dst_port in group:
+            return dst_port or 0
+        if src_port in group:
+            return src_port or 0
+    return 0
+
+
 def _infer_tcp_app_layer(tcp, dst_port: int | None, src_port: int | None) -> str:
-    """基于端口 + payload 推断 TCP 应用层协议"""
+    """基于端口 + payload 推断 TCP 应用层协议，同时检查 src/dst 端口"""
     from scapy.all import Raw
 
     payload = bytes(tcp.payload) if tcp.payload else b""
     if not payload:
         return ""
 
-    port = dst_port or 0
+    port = _match_port(dst_port, src_port, [
+        (80, 8080, 8000, 8888),    # HTTP
+        (443, 8443),               # TLS
+        (22,),                     # SSH
+        (21, 20),                  # FTP
+        (25,),                     # SMTP
+        (110,),                    # POP3
+        (143,),                    # IMAP
+        (23,),                     # Telnet
+        (3389,),                   # RDP
+        (445,),                    # SMB
+        (3306,),                   # MySQL
+    ])
     hint = ""
 
     if port in (80, 8080, 8000, 8888):
@@ -208,22 +277,27 @@ def _infer_tcp_app_layer(tcp, dst_port: int | None, src_port: int | None) -> str
 
 
 def _infer_udp_app_layer(udp, dst_port: int | None, src_port: int | None) -> str:
-    """基于端口 + payload 推断 UDP 应用层协议"""
+    """基于端口 + payload 推断 UDP 应用层协议，同时检查 src/dst 端口"""
     payload = bytes(udp.payload) if udp.payload else b""
     if not payload:
         return ""
 
-    port = dst_port or 0
+    port = _match_port(dst_port, src_port, [
+        (53,),       # DNS
+        (67, 68),    # DHCP
+        (123,),      # NTP
+        (161,),      # SNMP
+        (443,),      # QUIC
+    ])
 
     if port == 53:
         # DNS: 12 bytes header minimum
         if len(payload) >= 12:
             qr = (payload[2] >> 7) & 1  # QR bit: 0=query, 1=response
-            qdcount = (payload[4] << 8) | payload[5]
+            direction = "Response" if qr else "Query"
             # 提取查询域名
             domain = _extract_dns_name(payload, 12)
             if domain:
-                direction = "Response" if qr else "Query"
                 return f"[DNS] {direction} {domain}"
             return f"[DNS] {direction}"
         return "[DNS]"
@@ -246,8 +320,10 @@ def _infer_udp_app_layer(udp, dst_port: int | None, src_port: int | None) -> str
     return ""
 
 
-def _extract_dns_name(data: bytes, offset: int) -> str:
+def _extract_dns_name(data: bytes, offset: int, _depth: int = 0) -> str:
     """从 DNS payload 中提取查询域名"""
+    if _depth > 10:
+        return ""
     labels = []
     pos = offset
     try:
@@ -258,7 +334,7 @@ def _extract_dns_name(data: bytes, offset: int) -> str:
             if (length & 0xC0) == 0xC0:
                 # DNS compression pointer
                 ptr = ((length & 0x3F) << 8) | data[pos + 1]
-                rest = _extract_dns_name(data, ptr)
+                rest = _extract_dns_name(data, ptr, _depth + 1)
                 if rest:
                     labels.append(rest)
                 break

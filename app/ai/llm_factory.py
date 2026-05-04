@@ -96,10 +96,13 @@ def _create_anthropic(
 ) -> BaseChatModel:
     from langchain_anthropic import ChatAnthropic
 
-    return ChatAnthropic(
+    kw = dict(
         api_key=api_key, model=model, temperature=temperature,
-        max_tokens=max_tokens, timeout=timeout, streaming=True,
+        max_tokens=max_tokens, timeout=timeout, streaming=stream_usage,
     )
+    if base_url:
+        kw["anthropic_api_url"] = base_url
+    return ChatAnthropic(**kw)
 
 
 # 注册内置 provider 类型

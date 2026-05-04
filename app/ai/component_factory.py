@@ -25,6 +25,7 @@ def create_ai_engine(ai_config: dict) -> AIEngine:
         timeout=ai_config["timeout"],
         context_window_tokens=ai_config["context_window_tokens"],
         max_tokens=ai_config["max_tokens"],
+        max_input_chars=ai_config.get("max_input_chars"),
     )
 
 
@@ -32,6 +33,7 @@ def create_prompt_builder(ai_config: dict) -> PromptBuilder:
     """根据 AI 配置创建 PromptBuilder 实例"""
     return PromptBuilder(
         context_window_tokens=ai_config["context_window_tokens"],
+        max_input_chars=ai_config.get("max_input_chars"),
     )
 
 

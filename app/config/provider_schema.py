@@ -18,13 +18,14 @@ _PROVIDER_SCHEMA_FIELDS = (
     "provider_type",
     "context_window_tokens",
     "max_tokens",
+    "max_input_chars",
     "temperature",
     "timeout",
     "max_concurrency",
 )
 
-# 需要清理的旧字段名
-_DEPRECATED_FIELDS = ("max_output_tokens", "max_input_chars")
+# 需要清理的旧字段名（仅 max_output_tokens，已重命名为 max_tokens）
+_DEPRECATED_FIELDS = ("max_output_tokens",)
 
 
 def ensure_provider_schema(config: dict) -> bool:

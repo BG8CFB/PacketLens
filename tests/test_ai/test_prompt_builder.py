@@ -1,5 +1,7 @@
 """PromptBuilder 单元测试"""
 
+import logging
+
 from app.ai.prompt_builder import PromptBuilder, _select_relevant_packets
 from app.models.flow_record import FlowRecord
 from app.models.packet_record import PacketRecord
@@ -189,3 +191,74 @@ class TestSelectRelevantPackets:
         flow = _make_flow("f1", "1.1.1.1", "2.2.2.2", 80, 443, "TCP")
         selected = _select_relevant_packets(packets, flow, max_packets=5)
         assert len(selected) == 0
+
+
+class TestPromptBuilderMaxInputChars:
+    """max_input_chars 相关功能测试"""
+
+    def test_default_max_input_chars(self):
+        """默认应使用 AI_DEFAULTS 中的 max_input_chars"""
+        builder = PromptBuilder()
+        assert builder._max_input_chars > 0
+
+    def test_custom_max_input_chars(self):
+        """自定义 max_input_chars 应生效"""
+        builder = PromptBuilder(max_input_chars=5000)
+        assert builder._max_input_chars == 5000
+
+    def test_layer3_dynamic_truncation(self):
+        """Layer 3 截断长度应基于 max_input_chars 动态计算"""
+        builder = PromptBuilder(max_input_chars=10000)
+        stats = {"total_packets": 100, "total_flows": 10}
+        long_layer1 = "A" * 20000
+        long_layer2 = ["B" * 20000]
+
+        user_prompt, _ = builder.build_layer3_prompt(
+            layer1_raw=long_layer1,
+            layer2_results=long_layer2,
+            stats=stats,
+            suspicious_flow_count=1,
+            confirmed_flow_count=0,
+        )
+
+        # 验证 Layer1 结果被截断到约 40%（10000 * 0.4 = 4000 字符）
+        assert "A" * 4000 in user_prompt
+        assert "A" * 4001 not in user_prompt
+
+    def test_layer1_length_warning_on_oversized(self, caplog):
+        """超长 Layer1 prompt 应记录警告"""
+        builder = PromptBuilder(max_input_chars=100)
+        flows = [
+            _make_flow(f"f{i}", "10.0.0.1", f"10.0.0.{i}", 12345, 80, "TCP")
+            for i in range(50)
+        ]
+        stats = {
+            "total_packets": 1000, "total_bytes": 500000,
+            "total_flows": 50, "duration": 10, "bandwidth_bps": 400000,
+            "protocol_distribution": {"TCP": 1000},
+            "top_talkers_src": [], "top_talkers_dst": [],
+        }
+
+        with caplog.at_level(logging.WARNING):
+            user_prompt, _ = builder.build_layer1_prompt(flows, [], stats, [])
+
+        # prompt 应该超过了 100 字符限制
+        assert len(user_prompt) > 100
+        assert any("超过安全上限" in r.message for r in caplog.records)
+
+
+class TestFormatFlowFlagsOrder:
+    """flags_set 排序一致性测试"""
+
+    def test_flags_output_is_sorted(self):
+        """flags_set 输出应始终按字典序排列"""
+        flow = FlowRecord(
+            flow_id="f1", src_ip="1.1.1.1", dst_ip="2.2.2.2",
+            src_port=80, dst_port=443, protocol="TCP",
+            flags_set={"SYN", "ACK", "FIN", "PSH"},
+        )
+        builder = PromptBuilder()
+        from app.ai.prompt_builder import _format_flow_with_packets
+        result = _format_flow_with_packets(flow, [], 5)
+        # flags 应按排序顺序出现：ACK,FIN,PSH,SYN
+        assert "flags=ACK,FIN,PSH,SYN" in result

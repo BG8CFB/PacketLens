@@ -46,7 +46,7 @@ class FlowRecord:
         return self.packet_count / dur
 
     def to_dict(self) -> dict:
-        """序列化为字典，flags_set 转为 sorted list 以支持 JSON"""
+        """序列化为字典，仅包含存储属性；flags_set 转为 sorted list 以支持 JSON"""
         return {
             "flow_id": self.flow_id,
             "src_ip": self.src_ip,
@@ -61,5 +61,24 @@ class FlowRecord:
             "flags_set": sorted(self.flags_set),
             "has_payload": self.has_payload,
             "service": self.service,
-            "duration": self.duration,
         }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> FlowRecord:
+        """从字典反序列化"""
+        flags_data = data.get("flags_set", [])
+        return cls(
+            flow_id=data.get("flow_id", ""),
+            src_ip=data.get("src_ip", ""),
+            dst_ip=data.get("dst_ip", ""),
+            src_port=data.get("src_port", 0),
+            dst_port=data.get("dst_port", 0),
+            protocol=data.get("protocol", ""),
+            packet_count=data.get("packet_count", 0),
+            byte_count=data.get("byte_count", 0),
+            first_seen=data.get("first_seen", 0.0),
+            last_seen=data.get("last_seen", 0.0),
+            flags_set=set(flags_data) if flags_data else set(),
+            has_payload=data.get("has_payload", False),
+            service=data.get("service"),
+        )

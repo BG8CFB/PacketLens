@@ -49,9 +49,13 @@ WELL_KNOWN_PORTS: dict[tuple[int, str], str] = {
 
 
 def classify_service(src_port: int | None, dst_port: int | None, protocol: str) -> str | None:
-    """根据端口号推断服务名"""
+    """根据端口号推断服务名
+
+    优先匹配目标端口，其次匹配源端口。
+    跳过 None 和 0 值端口（ICMP 等无端口协议的端口会被填为 0）。
+    """
     for port in (dst_port, src_port):
-        if port is not None:
+        if port is not None and port > 0:
             key = (port, protocol)
             if key in WELL_KNOWN_PORTS:
                 return WELL_KNOWN_PORTS[key]

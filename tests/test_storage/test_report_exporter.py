@@ -1,7 +1,8 @@
-"""ReportExporter 单元测试"""
+"""ReportExporter 单元测试 — 覆盖导出格式、XSS 防护、文件保存"""
 
 import json
 from datetime import datetime
+from pathlib import Path
 
 from app.models.analysis_result import AnalysisIssue, AnalysisResult
 from app.storage.report_exporter import ReportExporter
@@ -111,3 +112,144 @@ class TestReportExporter:
         assert filepath.exists()
         content = filepath.read_text(encoding="utf-8")
         assert content == "# Test Report"
+
+
+class TestReportExporterXSS:
+    """XSS 防护测试 — 验证 HTML 输出中对用户输入的转义"""
+
+    def test_html_escapes_script_in_title(self):
+        """title 中的 <script> 标签应被转义"""
+        exporter = ReportExporter()
+        result = AnalysisResult(
+            summary="正常摘要",
+            issues=[
+                AnalysisIssue(
+                    severity="Warning",
+                    category="Security",
+                    title='<script>alert("xss")</script>',
+                    description="描述",
+                ),
+            ],
+        )
+        html = exporter.export_html({}, result)
+        assert "<script>" not in html
+        assert "&lt;script&gt;" in html
+        assert 'alert("xss")' in html or "alert(&quot;xss&quot;)" in html
+
+    def test_html_escapes_script_in_description(self):
+        """description 中的恶意内容应被转义"""
+        exporter = ReportExporter()
+        result = AnalysisResult(
+            summary="正常摘要",
+            issues=[
+                AnalysisIssue(
+                    severity="Info",
+                    category="Protocol",
+                    title="正常标题",
+                    description='<img src=x onerror="alert(1)">',
+                ),
+            ],
+        )
+        html = exporter.export_html({}, result)
+        assert "<img" not in html
+        assert "&lt;img" in html
+
+    def test_html_escapes_script_in_summary(self):
+        """summary 中的恶意内容应被转义"""
+        exporter = ReportExporter()
+        result = AnalysisResult(
+            summary='<script>document.cookie</script>',
+        )
+        html = exporter.export_html({}, result)
+        assert "<script>" not in html
+        assert "&lt;script&gt;" in html
+
+    def test_html_escapes_recommendation(self):
+        """recommendation 中的恶意内容应被转义"""
+        exporter = ReportExporter()
+        result = AnalysisResult(
+            issues=[
+                AnalysisIssue(
+                    severity="Warning",
+                    category="Security",
+                    title="问题",
+                    description="描述",
+                    recommendation='<a href="evil">点击</a>',
+                ),
+            ],
+        )
+        html = exporter.export_html({}, result)
+        assert '<a href="evil">' not in html
+
+    def test_html_escapes_assessment(self):
+        """overall_assessment 中的恶意内容应被转义"""
+        exporter = ReportExporter()
+        result = AnalysisResult(
+            summary="摘要",
+            overall_assessment='<b onmouseover="alert(1)">危险</b>',
+        )
+        html = exporter.export_html({}, result)
+        assert "<b onmouseover" not in html
+        assert "&lt;b" in html
+
+    def test_json_output_preserves_special_chars(self):
+        """JSON 输出应保留特殊字符（不做 HTML 转义）"""
+        exporter = ReportExporter()
+        result = AnalysisResult(
+            summary='<script>alert("xss")</script>',
+            issues=[
+                AnalysisIssue(
+                    severity="Info",
+                    category="Protocol",
+                    title='<tag>special & chars</tag>',
+                    description='"quotes" & <tags>',
+                ),
+            ],
+        )
+        json_str = exporter.export_json({}, result)
+        data = json.loads(json_str)
+        # JSON 输出不应做 HTML 转义
+        assert data["analysis"]["summary"] == '<script>alert("xss")</script>'
+        assert data["analysis"]["issues"][0]["title"] == '<tag>special & chars</tag>'
+
+    def test_markdown_output_preserves_special_chars(self):
+        """Markdown 输出应保留特殊字符（不做 HTML 转义）"""
+        exporter = ReportExporter()
+        result = AnalysisResult(
+            summary='<script>alert("xss")</script>',
+        )
+        md = exporter.export_markdown({}, result)
+        assert '<script>alert("xss")</script>' in md
+
+    def test_empty_strings_handled(self):
+        """空字符串应安全处理"""
+        exporter = ReportExporter()
+        result = AnalysisResult(
+            summary="",
+            overall_assessment="",
+            issues=[
+                AnalysisIssue(
+                    severity="Info",
+                    category="Protocol",
+                    title="",
+                    description="",
+                    recommendation="",
+                ),
+            ],
+        )
+        # 不应抛出异常
+        html = exporter.export_html({}, result)
+        assert isinstance(html, str)
+
+        md = exporter.export_markdown({}, result)
+        assert isinstance(md, str)
+
+    def test_none_assessment_handled(self):
+        """None assessment 应安全处理"""
+        exporter = ReportExporter()
+        result = AnalysisResult(overall_assessment=None)
+        html = exporter.export_html({}, result)
+        assert "未评估" in html
+
+        md = exporter.export_markdown({}, result)
+        assert "未评估" in md

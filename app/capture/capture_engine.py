@@ -216,8 +216,10 @@ class CaptureEngine:
             self._duration_timer.stop()
 
             # 停止抓包线程
+            dropped = 0
             if self._sniff_thread:
                 self._sniff_thread.stop(timeout=5.0)
+                dropped = self._sniff_thread.dropped_count
                 self._sniff_thread = None
 
             # 最后一次轮询，确保所有包被处理
@@ -236,6 +238,10 @@ class CaptureEngine:
                     logger.info(f"PCAP 文件写入: {written} 个包 → {self._pcap_path}")
                 self._pcap_writer = None
 
+            # 丢包警告
+            if dropped > 0:
+                logger.warning(f"抓包过程中因队列满丢弃 {dropped} 个包")
+
             # 异步执行预处理（避免阻塞主线程）
             future = self._preprocess_executor.submit(self._run_preprocessing)
 
@@ -250,7 +256,7 @@ class CaptureEngine:
                 except Exception as e:
                     logger.error(f"预处理失败: {e}")
                 self._signals.capture_stopped.emit(self._total_captured)
-                logger.info(f"抓包已停止，共 {self._total_captured} 个包")
+                logger.info(f"抓包已停止，共 {self._total_captured} 个包（丢弃 {dropped} 个）")
                 if self._on_capture_complete:
                     self._on_capture_complete()
 
@@ -260,9 +266,13 @@ class CaptureEngine:
             self._stop_lock.release()
 
     def _on_poll(self) -> None:
-        """QTimer 轮询回调：从 capture_queue 批量取出包并更新模型和流聚合"""
+        """QTimer 轮询回调：从 capture_queue 批量取出包并更新模型和流聚合
+
+        单次轮询最多处理 POLL_BATCH_SIZE 个包，防止队列积压时阻塞主线程。
+        """
         batch: list[PacketRecord] = []
-        while True:
+        max_batch = 1000  # 单次轮询批量上限，防止主线程卡顿
+        while len(batch) < max_batch:
             try:
                 pkt = self._capture_queue.get_nowait()
                 batch.append(pkt)
@@ -323,4 +333,5 @@ class CaptureEngine:
         """清理资源，关闭线程池"""
         if self._capture_active.is_set():
             self.stop_capture()
-        self._preprocess_executor.shutdown(wait=False)
+        # 等待预处理完成后再关闭线程池，避免丢失预处理结果
+        self._preprocess_executor.shutdown(wait=True)

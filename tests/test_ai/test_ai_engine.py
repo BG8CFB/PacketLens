@@ -1,5 +1,7 @@
 """AI Engine 真实测试 — 调用真实 API（LangChain 版）"""
 
+import logging
+
 import pytest
 
 from app.ai.ai_engine import AIEngine
@@ -152,12 +154,14 @@ class TestAIEngineCloneForWorker:
             base_url=cfg["base_url"],
             model=cfg["model"],
             max_tokens=2000,
+            max_input_chars=50000,
         )
         clone = engine.clone_for_worker(max_tokens=1000)
         assert clone._provider_type == engine._provider_type
         assert clone._api_key == engine._api_key
         assert clone._model == engine._model
         assert clone._max_tokens == 1000
+        assert clone._max_input_chars == 50000
 
     def test_clone_independent_llm_instance(self):
         """clone 应创建独立的 LLM 实例"""
@@ -184,3 +188,64 @@ class TestAIEngineCloneForWorker:
         result = clone.analyze(prompt="1+1=?", max_tokens=10)
         assert isinstance(result, str)
         assert len(result) > 0
+
+
+class TestAIEngineMaxInputChars:
+    """max_input_chars 输入长度安全检查测试"""
+
+    def test_default_max_input_chars(self):
+        """默认 max_input_chars 应从 AI_DEFAULTS 读取"""
+        cfg = _get_config()
+        engine = AIEngine(
+            provider_type=cfg.get("provider_type", "openai"),
+            api_key=cfg["api_key"],
+            base_url=cfg["base_url"],
+            model=cfg["model"],
+        )
+        assert engine._max_input_chars > 0
+
+    def test_custom_max_input_chars(self):
+        """自定义 max_input_chars 应生效"""
+        cfg = _get_config()
+        engine = AIEngine(
+            provider_type=cfg.get("provider_type", "openai"),
+            api_key=cfg["api_key"],
+            base_url=cfg["base_url"],
+            model=cfg["model"],
+            max_input_chars=100,
+        )
+        assert engine._max_input_chars == 100
+
+    def test_oversized_input_logs_warning(self, caplog):
+        """超长输入应记录警告但不阻止调用"""
+        cfg = _get_config()
+        engine = AIEngine(
+            provider_type=cfg.get("provider_type", "openai"),
+            api_key=cfg["api_key"],
+            base_url=cfg["base_url"],
+            model=cfg["model"],
+            max_input_chars=50,
+        )
+        # 发送一个超过 50 字符的 prompt
+        long_prompt = "这是一段很长的数据，用于测试输入长度检查。" * 10
+
+        with caplog.at_level(logging.WARNING):
+            # 使用 analyze_stream 避免 API 调用超时
+            try:
+                engine.analyze(
+                    prompt=long_prompt,
+                    max_tokens=5,
+                )
+            except Exception:
+                pass  # API 可能返回错误，但我们只关心警告日志
+
+        assert any("超过安全上限" in r.message for r in caplog.records)
+
+    def test_missing_api_key_raises_before_length_check(self):
+        """缺少 API Key 应在长度检查之前报错"""
+        engine = AIEngine(
+            api_key="",
+            max_input_chars=50,
+        )
+        with pytest.raises(ValueError, match="API Key"):
+            engine.analyze(prompt="短文本")

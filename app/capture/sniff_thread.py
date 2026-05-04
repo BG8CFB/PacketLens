@@ -39,6 +39,7 @@ class SniffThread(threading.Thread):
         self._on_error = on_error
         self._stop_event = threading.Event()
         self._packet_index = 0
+        self._dropped_count = 0  # 队列满时丢弃的包数
         self._index_lock = threading.Lock()
         self._error_occurred = False
 
@@ -72,28 +73,40 @@ class SniffThread(threading.Thread):
                 self._on_error(error_msg)
 
     def _on_packet(self, pkt) -> None:
-        """Scapy prn 回调：解析包并放入队列"""
+        """Scapy prn 回调：解析包并放入队列
+
+        当队列满时丢弃数据包，但 packet_index 仍递增（代表网卡实际捕获数量）。
+        dropped_count 追踪因队列满而丢弃的包数，供上层了解丢包情况。
+
+        优化：先尝试 pcap_queue，成功后再创建 PacketRecord，避免 pcap 队列满时
+        浪费解析开销。
+        """
         with self._index_lock:
             self._packet_index += 1
             idx = self._packet_index
 
+        # pcap 优先策略：pcap 队列满则直接丢弃，跳过 record 创建
+        try:
+            self._pcap_queue.put_nowait(pkt)
+        except queue.Full:
+            logger.warning(f"pcap_queue 已满，丢弃数据包 #{idx}")
+            with self._index_lock:
+                self._dropped_count += 1
+            return
+
         try:
             record = PacketRecord.from_scapy_packet(idx, pkt)
-            # pcap 优先策略：pcap 失败则 capture 也跳过，保持一致性
-            pcap_ok = True
             try:
-                self._pcap_queue.put_nowait(pkt)
+                self._capture_queue.put_nowait(record)
             except queue.Full:
-                logger.warning(f"pcap_queue 已满，丢弃数据包 #{idx}")
-                pcap_ok = False
+                logger.warning(f"capture_queue 已满，丢弃数据包 #{idx}")
+                with self._index_lock:
+                    self._dropped_count += 1
 
-            if pcap_ok:
-                try:
-                    self._capture_queue.put_nowait(record)
-                except queue.Full:
-                    logger.warning(f"capture_queue 已满，丢弃数据包 #{idx}")
         except Exception as e:
             logger.warning(f"解析数据包 #{idx} 失败: {e}")
+            with self._index_lock:
+                self._dropped_count += 1
 
     def _stop_check(self, _pkt) -> bool:
         """Scapy stop_filter 回调：检查停止信号"""
@@ -101,7 +114,10 @@ class SniffThread(threading.Thread):
 
     def stop(self, timeout: float = 5.0) -> None:
         """停止抓包线程"""
-        logger.info(f"请求停止抓包，已捕获 {self._packet_index} 个包")
+        with self._index_lock:
+            total = self._packet_index
+            dropped = self._dropped_count
+        logger.info(f"请求停止抓包，已捕获 {total} 个包（丢弃 {dropped} 个）")
         self._stop_event.set()
         self.join(timeout=timeout)
         if self.is_alive():
@@ -109,5 +125,12 @@ class SniffThread(threading.Thread):
 
     @property
     def packet_count(self) -> int:
+        """实际从网卡捕获的包数（含丢弃的）"""
         with self._index_lock:
             return self._packet_index
+
+    @property
+    def dropped_count(self) -> int:
+        """因队列满而丢弃的包数"""
+        with self._index_lock:
+            return self._dropped_count

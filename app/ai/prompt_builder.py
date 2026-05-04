@@ -7,31 +7,44 @@ Layer 3: 综合报告（汇总 Layer1 + Layer2 结果）
 
 from __future__ import annotations
 
-import json
 import logging
-from collections import Counter
+from typing import TYPE_CHECKING
 
 from app.ai.prompts.system_prompt import get_system_prompt
 from app.ai.prompts.quick_analysis import get_layer1_template
 from app.ai.prompts.deep_analysis import get_layer2_template, get_layer3_template
 from app.config.ai_defaults import AI_DEFAULTS
-from app.models.flow_record import FlowRecord
-from app.models.packet_record import PacketRecord
 from app.preprocessing.protocol_classifier import classify_service
+
+if TYPE_CHECKING:
+    from app.models.flow_record import FlowRecord
+    from app.models.packet_record import PacketRecord
 
 logger = logging.getLogger(__name__)
 
 # Layer 1 每条流的固定采样包数（从配置读取）
 PACKETS_PER_FLOW_LAYER1 = AI_DEFAULTS["packets_per_flow_layer1"]
 
+# Layer 3 截断长度（字符数），基于 max_input_chars 按比例分配
+_LAYER3_LAYER1_RATIO = 0.40   # Layer1 结果占输入上限的 40%
+_LAYER3_LAYER2_RATIO = 0.60   # Layer2 结果占输入上限的 60%
+
 
 class PromptBuilder:
     """构建 AI 分析提示词"""
 
-    def __init__(self, context_window_tokens: int | None = None):
+    def __init__(
+        self,
+        context_window_tokens: int | None = None,
+        max_input_chars: int | None = None,
+    ):
         self._context_window_tokens = (
             context_window_tokens if context_window_tokens is not None
             else AI_DEFAULTS["context_window_tokens"]
+        )
+        self._max_input_chars = (
+            max_input_chars if max_input_chars is not None
+            else AI_DEFAULTS["max_input_chars"]
         )
 
     # ── Layer 1: 全量流量分析 ──
@@ -85,6 +98,14 @@ class PromptBuilder:
             all_flows_with_packets="\n".join(flow_sections),
         )
 
+        # 输入长度安全检查
+        prompt_len = len(user_prompt) + len(system)
+        if prompt_len > self._max_input_chars:
+            logger.warning(
+                f"Layer1 prompt 长度 {prompt_len} 超过安全上限 "
+                f"{self._max_input_chars}，可能触发 API 限制"
+            )
+
         logger.info(
             f"Layer1 prompt: {len(flows)} 条流, "
             f"每流 {PACKETS_PER_FLOW_LAYER1} 包采样, "
@@ -123,7 +144,7 @@ class PromptBuilder:
             packet_count=flow.packet_count,
             byte_count=flow.byte_count,
             duration=f"{flow.duration:.2f}",
-            flags=",".join(flow.flags_set) or "无",
+            flags=",".join(sorted(flow.flags_set)) or "无",
             packets_detail="\n".join(pkt_lines),
             context=context or "无额外上下文",
         )
@@ -145,9 +166,13 @@ class PromptBuilder:
 
         layer2_combined = "\n\n---\n\n".join(layer2_results) if layer2_results else "无可疑流需要深度分析"
 
+        # 基于配置的 max_input_chars 动态计算截断长度
+        layer1_limit = int(self._max_input_chars * _LAYER3_LAYER1_RATIO)
+        layer2_limit = int(self._max_input_chars * _LAYER3_LAYER2_RATIO)
+
         user_prompt = get_layer3_template().format(
-            layer1_result=layer1_raw[:8000],  # 限制 Layer1 结果长度避免过大
-            layer2_results=layer2_combined[:12000],  # 限制 Layer2 结果总长度
+            layer1_result=layer1_raw[:layer1_limit],
+            layer2_results=layer2_combined[:layer2_limit],
             total_packets=stats.get("total_packets", 0),
             total_flows=stats.get("total_flows", 0),
             suspicious_flow_count=suspicious_flow_count,
@@ -168,12 +193,12 @@ def _format_flow_with_packets(
     svc = flow.service or classify_service(flow.src_port, flow.dst_port, flow.protocol)
     svc_tag = f" [{svc}]" if svc else ""
 
-    # 流摘要行
+    # 流摘要行（flags_set 排序保证输出一致性）
     header = (
         f"### 流 [{flow.flow_id}] {flow.src_ip}:{flow.src_port} -> "
         f"{flow.dst_ip}:{flow.dst_port} ({flow.protocol}) "
         f"{flow.packet_count}包 {flow.byte_count}B dur={flow.duration:.2f}s "
-        f"flags={','.join(flow.flags_set) or '-'}{svc_tag}"
+        f"flags={','.join(sorted(flow.flags_set)) or '-'}{svc_tag}"
     )
 
     # 选择属于该流的包

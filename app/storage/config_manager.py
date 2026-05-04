@@ -127,6 +127,7 @@ class ConfigManager:
             "model": os.environ.get("PACKETLENS_MODEL") or active.get("model", ""),
             "context_window_tokens": active.get("context_window_tokens", AI_DEFAULTS["context_window_tokens"]),
             "max_tokens": active.get("max_tokens", AI_DEFAULTS["max_tokens"]),
+            "max_input_chars": active.get("max_input_chars", AI_DEFAULTS["max_input_chars"]),
             "temperature": active.get("temperature", AI_DEFAULTS["temperature"]),
             "timeout": active.get("timeout", AI_DEFAULTS["timeout"]),
             "max_concurrency": active.get("max_concurrency", AI_DEFAULTS["max_concurrency"]),

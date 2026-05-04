@@ -25,7 +25,10 @@ def is_npcap_installed() -> bool:
             winreg.HKEY_LOCAL_MACHINE,
             r"SOFTWARE\WOW6432Node\Npcap",
         )
-        winreg.CloseKey(key)
+        try:
+            winreg.CloseKey(key)
+        except OSError:
+            pass
         return True
     except (OSError, ImportError):
         pass
@@ -48,11 +51,20 @@ def get_npcap_dll_path() -> str | None:
     return None
 
 
+_NPCAP_URL = "https://npcap.com/#download"
+
+
 def open_npcap_download():
-    """打开 Npcap 下载页面"""
-    url = "https://npcap.com/#download"
-    webbrowser.open(url)
-    return url
+    """打开 Npcap 下载页面
+
+    Returns:
+        str: 下载页面 URL（即使浏览器打开失败也返回 URL 供用户手动访问）
+    """
+    try:
+        webbrowser.open(_NPCAP_URL)
+    except Exception:
+        pass
+    return _NPCAP_URL
 
 
 def check_admin_privilege() -> bool:

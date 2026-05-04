@@ -18,6 +18,31 @@ class AnalysisIssue:
     recommendation: str = ""
     raw_detail: str | None = None
 
+    def to_dict(self) -> dict:
+        """序列化为字典"""
+        return {
+            "severity": self.severity,
+            "category": self.category,
+            "title": self.title,
+            "description": self.description,
+            "affected_flows": self.affected_flows,
+            "recommendation": self.recommendation,
+            "raw_detail": self.raw_detail,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> AnalysisIssue:
+        """从字典反序列化"""
+        return cls(
+            severity=data.get("severity", "Info"),
+            category=data.get("category", "General"),
+            title=data.get("title", ""),
+            description=data.get("description", ""),
+            affected_flows=data.get("affected_flows", []),
+            recommendation=data.get("recommendation", ""),
+            raw_detail=data.get("raw_detail"),
+        )
+
 
 @dataclass
 class AnalysisResult:
@@ -53,3 +78,43 @@ class AnalysisResult:
     @property
     def has_warnings(self) -> bool:
         return self.warning_count > 0
+
+    def to_dict(self) -> dict:
+        """序列化为字典（不包含计算属性）"""
+        return {
+            "session_id": self.session_id,
+            "analysis_mode": self.analysis_mode,
+            "timestamp": self.timestamp.isoformat(),
+            "summary": self.summary,
+            "issues": [issue.to_dict() for issue in self.issues],
+            "protocol_insights": self.protocol_insights,
+            "overall_assessment": self.overall_assessment,
+            "raw_ai_response": self.raw_ai_response,
+            "token_usage": self.token_usage,
+            "duration_seconds": self.duration_seconds,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> AnalysisResult:
+        """从字典反序列化"""
+        issues_data = data.get("issues", [])
+        issues = [AnalysisIssue.from_dict(i) for i in issues_data]
+        timestamp_str = data.get("timestamp", "")
+        if timestamp_str:
+            timestamp = datetime.fromisoformat(timestamp_str)
+            if timestamp.tzinfo is None:
+                timestamp = timestamp.replace(tzinfo=timezone.utc)
+        else:
+            timestamp = datetime.now(tz=timezone.utc)
+        return cls(
+            session_id=data.get("session_id", ""),
+            analysis_mode=data.get("analysis_mode", "quick"),
+            timestamp=timestamp,
+            summary=data.get("summary", ""),
+            issues=issues,
+            protocol_insights=data.get("protocol_insights", {}),
+            overall_assessment=data.get("overall_assessment", ""),
+            raw_ai_response=data.get("raw_ai_response", ""),
+            token_usage=data.get("token_usage", {}),
+            duration_seconds=data.get("duration_seconds", 0.0),
+        )

@@ -116,6 +116,9 @@ class AnalysisPanel(QWidget):
         self._stream_output.show()
         self._stats_label.setText("")
         self._clear_cards()
+        # 禁用操作按钮，防止重复触发分析
+        self._deep_btn.setEnabled(False)
+        self._reanalyze_btn.setEnabled(False)
 
     def reset_from_error(self, error: str) -> None:
         """分析出错后恢复面板可用状态"""
@@ -123,10 +126,9 @@ class AnalysisPanel(QWidget):
         self._summary_label.setText(f"分析失败: {error[:200]}")
         self._summary_label.setStyleSheet("font-size: 14px; padding: 8px; color: #FF4444;")
         self._stats_label.setText("")
-        if hasattr(self, '_deep_btn'):
-            self._deep_btn.setEnabled(True)
-        if hasattr(self, '_reanalyze_btn'):
-            self._reanalyze_btn.setEnabled(True)
+        # __init__ 中已创建按钮，无需 hasattr 检查
+        self._deep_btn.setEnabled(True)
+        self._reanalyze_btn.setEnabled(True)
         self._stream_text = ""
 
     def update_progress(self, chunk: str) -> None:

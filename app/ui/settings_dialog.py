@@ -226,6 +226,9 @@ class SettingsDialog(QDialog):
 
     def _on_provider_switched(self, index: int) -> None:
         """切换 provider 前保存当前编辑"""
+        # 边界检查：combo 清空或越界时不处理
+        if index < 0 or index >= len(self._providers):
+            return
         self._save_current_provider()
         self._current_index = index
         self._active_name = self._providers[index]["name"]
@@ -372,7 +375,27 @@ class SettingsDialog(QDialog):
             return
 
         self._providers.pop(self._current_index)
-        self._current_index = max(0, self._current_index - 1)
+
+        # 删除后列表为空时，重置 UI 并禁止操作
+        if not self._providers:
+            self._current_index = 0
+            self._active_name = ""
+            self._provider_combo.clear()
+            self._name_edit.clear()
+            self._api_base_edit.clear()
+            self._api_key_edit.clear()
+            self._model_edit.clear()
+            self._context_window_spin.setValue(AI_DEFAULTS["context_window_tokens"])
+            self._max_tokens_spin.setValue(AI_DEFAULTS["max_tokens"])
+            self._temperature_spin.setValue(AI_DEFAULTS["temperature"])
+            self._timeout_spin.setValue(AI_DEFAULTS["timeout"])
+            self._concurrency_spin.setValue(AI_DEFAULTS["max_concurrency"])
+            self._set_form_editable(False)
+            self._del_btn.setEnabled(False)
+            self._readonly_hint.setText("暂无模型，请点击「添加」创建")
+            return
+
+        self._current_index = min(self._current_index, len(self._providers) - 1)
         self._active_name = self._providers[self._current_index]["name"]
         self._refresh_combo()
         self._load_provider_to_ui()
@@ -381,11 +404,29 @@ class SettingsDialog(QDialog):
 
     def _save_and_accept(self) -> None:
         self._save_current_provider()
+        # 验证当前 provider 的必填字段（非默认 provider 才校验）
+        if self._providers:
+            p = self._providers[self._current_index]
+            if not p.get("is_default", False):
+                missing = []
+                if not p.get("model", "").strip():
+                    missing.append("模型 ID")
+                if not p.get("api_base", "").strip():
+                    provider_type = p.get("provider_type", "openai")
+                    if provider_type == "openai":
+                        missing.append("API 地址")
+                if missing:
+                    QMessageBox.warning(
+                        self, "配置不完整",
+                        f"请填写以下必填字段:\n\n" + "\n".join(f"• {f}" for f in missing),
+                    )
+                    return
         self._config.set_providers(self._providers, self._active_name)
         self._config.set("default_capture_duration", self._duration_spin.value())
         self._config.set("auto_analyze", self._auto_analyze_cb.isChecked())
         self._config.set("auto_save_pcap", self._auto_save_cb.isChecked())
         self._config.save()
+        self._cleanup_test_timer()
         self.accept()
 
     def _toggle_key_visibility(self) -> None:
@@ -396,15 +437,22 @@ class SettingsDialog(QDialog):
             self._api_key_edit.setEchoMode(QLineEdit.Password)
             self._toggle_key_btn.setText("显示")
 
-    def reject(self) -> None:
-        """关闭对话框前清理测试连接资源"""
+    def _cleanup_test_timer(self) -> None:
+        """清理测试连接轮询定时器"""
         if self._test_poll_timer is not None:
             self._test_poll_timer.stop()
             self._test_poll_timer = None
+
+    def reject(self) -> None:
+        """关闭对话框前清理测试连接资源"""
+        self._cleanup_test_timer()
         super().reject()
 
     def _test_connection(self) -> None:
         """后台线程测试 API 连接，避免阻塞 UI"""
+        # 先清理上一次未完成的测试定时器，防止重复创建导致泄漏
+        self._cleanup_test_timer()
+
         self._test_btn.setEnabled(False)
         self._test_status.setText("测试中...")
         self._test_status.setStyleSheet("color: #FFB020;")

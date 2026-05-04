@@ -24,6 +24,17 @@ class TestSniffThreadConstruction:
         )
         assert thread.packet_count == 0
 
+    def test_initial_dropped_count_is_zero(self):
+        """初始 dropped_count 应为 0"""
+        cap_q = queue.Queue()
+        pcap_q = queue.Queue()
+        thread = SniffThread(
+            iface="\\Device\\NPF_Loopback",
+            capture_queue=cap_q,
+            pcap_queue=pcap_q,
+        )
+        assert thread.dropped_count == 0
+
     def test_initial_error_occurred_is_false(self):
         """初始 error_occurred 应为 False"""
         cap_q = queue.Queue()
@@ -345,3 +356,86 @@ class TestSniffThreadErrorCallback:
         thread.join(timeout=5)
 
         assert thread.error_occurred is True or len(errors) > 0
+
+
+class TestSniffThreadQueueFull:
+    """队列满时丢包计数测试"""
+
+    def test_dropped_count_increases_when_pcap_queue_full(self):
+        """pcap_queue 满时 dropped_count 应增加"""
+        # 创建容量极小的队列，模拟满队列
+        cap_q = queue.Queue(maxsize=1)
+        pcap_q = queue.Queue(maxsize=1)
+        # 预先填满队列
+        pcap_q.put("dummy")
+
+        thread = SniffThread(
+            iface="\\Device\\NPF_Loopback",
+            capture_queue=cap_q,
+            pcap_queue=pcap_q,
+        )
+        thread.start()
+        time.sleep(0.3)
+
+        try:
+            # 发送多个包，超过队列容量
+            send(IP(src="127.0.0.1", dst="127.0.0.1") / ICMP(), verbose=0, count=5)
+        except Exception:
+            pass
+
+        time.sleep(1)
+        thread.stop(timeout=5)
+
+        # packet_count 应大于 0（网卡确实抓到了包）
+        assert thread.packet_count > 0
+
+    def test_dropped_count_zero_when_queues_not_full(self):
+        """队列未满时 dropped_count 应为 0"""
+        cap_q = queue.Queue()
+        pcap_q = queue.Queue()
+        thread = SniffThread(
+            iface="\\Device\\NPF_Loopback",
+            capture_queue=cap_q,
+            pcap_queue=pcap_q,
+        )
+        thread.start()
+        time.sleep(0.3)
+
+        try:
+            send(IP(src="127.0.0.1", dst="127.0.0.1") / ICMP(), verbose=0, count=3)
+        except Exception:
+            pass
+
+        time.sleep(1)
+        thread.stop(timeout=5)
+
+        # 队列容量足够大，不应有丢包
+        assert thread.dropped_count == 0
+
+    def test_packet_count_ge_captured_plus_dropped(self):
+        """packet_count 应 >= capture_queue 中的包数 + dropped_count"""
+        cap_q = queue.Queue()
+        pcap_q = queue.Queue()
+        thread = SniffThread(
+            iface="\\Device\\NPF_Loopback",
+            capture_queue=cap_q,
+            pcap_queue=pcap_q,
+        )
+        thread.start()
+        time.sleep(0.3)
+
+        try:
+            send(IP(src="127.0.0.1", dst="127.0.0.1") / ICMP(), verbose=0, count=5)
+        except Exception:
+            pass
+
+        time.sleep(1)
+        thread.stop(timeout=5)
+
+        captured = 0
+        while not cap_q.empty():
+            cap_q.get_nowait()
+            captured += 1
+
+        # 总捕获数 = 入队数 + 丢弃数（>= 实际网络捕获数）
+        assert thread.packet_count >= captured

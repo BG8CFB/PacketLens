@@ -243,6 +243,7 @@ class TestProviderManagement:
         assert config["provider_type"] == AI_DEFAULTS["provider_type"]
         assert config["context_window_tokens"] == AI_DEFAULTS["context_window_tokens"]
         assert config["max_tokens"] == AI_DEFAULTS["max_tokens"]
+        assert config["max_input_chars"] == AI_DEFAULTS["max_input_chars"]
 
     def test_get_ai_config_with_provider(self, mgr: ConfigManager):
         """有 provider 时 get_ai_config 返回该 provider 的配置"""
@@ -378,13 +379,15 @@ class TestSchemaUpgrade:
         assert "timeout" in p
         assert "context_window_tokens" in p
         assert "max_tokens" in p
+        assert "max_input_chars" in p
         assert "provider_type" in p
         # 补全值应为 AI_DEFAULTS
         assert p["temperature"] == AI_DEFAULTS["temperature"]
         assert p["timeout"] == AI_DEFAULTS["timeout"]
+        assert p["max_input_chars"] == AI_DEFAULTS["max_input_chars"]
 
     def test_schema_removes_deprecated_fields(self, config_path: Path):
-        """废弃字段（max_output_tokens, max_input_chars）应被清理"""
+        """废弃字段（max_output_tokens）应被清理，max_input_chars 应保留"""
         old_config = {
             "ai_providers": [
                 {
@@ -403,7 +406,9 @@ class TestSchemaUpgrade:
         m = ConfigManager(config_path=config_path)
         p = m.get_providers()[0]
         assert "max_output_tokens" not in p
-        assert "max_input_chars" not in p
+        # max_input_chars 是合法字段，应保留
+        assert "max_input_chars" in p
+        assert p["max_input_chars"] == 50000
 
     def test_schema_fixes_invalid_active_provider(self, config_path: Path):
         """active_provider 指向不存在的 provider 时修正为第一个"""
@@ -561,3 +566,77 @@ class TestSchemaUpgrade:
         assert m3.get_providers() == []
         # 删除后回退到 AI_DEFAULTS
         assert m3.get_ai_config()["temperature"] == AI_DEFAULTS["temperature"]
+
+
+# ── 四、边界条件与健壮性测试 ──
+
+
+class TestConfigManagerEdgeCases:
+    """边界条件和错误恢复测试"""
+
+    def test_load_empty_file(self, config_path: Path):
+        """空文件应回退到默认值"""
+        config_path.parent.mkdir(parents=True, exist_ok=True)
+        config_path.write_text("")
+
+        m = ConfigManager(config_path=config_path)
+        assert m.get("theme") == "dark"
+
+    def test_load_non_json_content(self, config_path: Path):
+        """非 JSON 内容文件应回退到默认值"""
+        config_path.parent.mkdir(parents=True, exist_ok=True)
+        config_path.write_text("This is not JSON at all!")
+
+        m = ConfigManager(config_path=config_path)
+        assert m.get("theme") == "dark"
+
+    def test_load_unicode_content(self, config_path: Path):
+        """含中文/Unicode 的配置应正确读写"""
+        config_path.parent.mkdir(parents=True, exist_ok=True)
+        config_data = {"theme": "dark", "custom_label": "自定义标签测试"}
+        # 必须指定 utf-8 编码写入，因为 config_manager 以 utf-8 读取
+        config_path.write_text(json.dumps(config_data, ensure_ascii=False), encoding="utf-8")
+
+        m = ConfigManager(config_path=config_path)
+        assert m.get("custom_label") == "自定义标签测试"
+
+    def test_get_ai_config_max_input_chars_from_provider(self, config_path: Path):
+        """provider 自定义 max_input_chars 应生效"""
+        m = ConfigManager(config_path=config_path)
+        providers = [
+            {
+                "name": "CustomInput",
+                "provider_type": "openai",
+                "api_key": "k",
+                "model": "m",
+                "max_input_chars": 100000,
+            },
+        ]
+        m.set_providers(providers, "CustomInput")
+
+        config = m.get_ai_config()
+        assert config["max_input_chars"] == 100000
+
+    def test_provider_loader_incomplete_env_ignored(self, config_path: Path, monkeypatch):
+        """仅有 AI_NAME 但无 AI_API_KEY 时，内置 provider 不应被创建"""
+        monkeypatch.setenv("AI_NAME", "IncompleteAI")
+        monkeypatch.delenv("AI_API_KEY", raising=False)
+        monkeypatch.delenv("AI_MODEL", raising=False)
+        provider_loader._builtin_provider_cache = provider_loader._NOT_LOADED
+
+        m = ConfigManager(config_path=config_path)
+        providers = m.get_providers()
+        names = [p["name"] for p in providers]
+        assert "IncompleteAI" not in names
+
+    def test_corrupt_file_creates_backup(self, config_path: Path):
+        """损坏文件应创建 .corrupt 备份"""
+        config_path.parent.mkdir(parents=True, exist_ok=True)
+        config_path.write_text("{broken!!!")
+
+        m = ConfigManager(config_path=config_path)
+        # 应使用默认值
+        assert m.get("theme") == "dark"
+        # 应创建备份文件
+        backup = config_path.with_suffix(".json.corrupt")
+        assert backup.exists()

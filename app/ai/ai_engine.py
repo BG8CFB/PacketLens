@@ -31,6 +31,7 @@ class AIEngine:
         timeout: int | None = None,
         context_window_tokens: int | None = None,
         max_tokens: int | None = None,
+        max_input_chars: int | None = None,
         temperature: float | None = None,
     ):
         self._provider_type = provider_type
@@ -45,6 +46,10 @@ class AIEngine:
         self._context_window_tokens = (
             context_window_tokens if context_window_tokens is not None
             else AI_DEFAULTS["context_window_tokens"]
+        )
+        self._max_input_chars = (
+            max_input_chars if max_input_chars is not None
+            else AI_DEFAULTS["max_input_chars"]
         )
         self._last_usage: dict = {}
 
@@ -75,6 +80,7 @@ class AIEngine:
 
         messages = self._build_messages(prompt, system_prompt)
         prompt_chars = sum(len(m.content) for m in messages)
+        self._check_input_length(prompt_chars)
         logger.info(f"发送 AI 请求: {len(messages)} 条消息, {prompt_chars} 字符")
 
         start = time.time()
@@ -100,8 +106,12 @@ class AIEngine:
         max_tokens: int | None = None,
     ) -> str:
         """流式分析调用"""
+        if not self._api_key:
+            raise ValueError("API Key 未配置，请在设置中配置 AI 模型的 API Key")
+
         messages = self._build_messages(prompt, system_prompt)
         prompt_chars = sum(len(m.content) for m in messages)
+        self._check_input_length(prompt_chars)
         logger.info(f"发送流式 AI 请求: {prompt_chars} 字符")
 
         start = time.time()
@@ -167,10 +177,23 @@ class AIEngine:
             timeout=self._timeout,
             context_window_tokens=self._context_window_tokens,
             max_tokens=max_tokens or self._max_tokens,
+            max_input_chars=self._max_input_chars,
             temperature=self._temperature,
         )
 
     # ── 内部方法 ──
+
+    def _check_input_length(self, prompt_chars: int) -> None:
+        """检查输入长度是否超过安全上限，超出时记录警告
+
+        不截断——由 PromptBuilder 在构建阶段通过智能采样控制数据量。
+        但仍需在此处发出警告，以便排查 API 调用失败的原因。
+        """
+        if prompt_chars > self._max_input_chars:
+            logger.warning(
+                f"输入长度 {prompt_chars} 字符超过安全上限 "
+                f"{self._max_input_chars}，API 调用可能因超出上下文窗口而失败"
+            )
 
     @staticmethod
     def _build_messages(prompt: str, system_prompt: str) -> list:

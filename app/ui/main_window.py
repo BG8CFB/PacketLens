@@ -209,8 +209,10 @@ class MainWindow(QMainWindow):
                 self._analysis_worker.analysis_progress.disconnect(self._on_analysis_progress)
             except RuntimeError:
                 pass
-            self._analysis_worker.wait(3000)
-        self._analysis_worker = None
+            # 超时后不强制置 None，让 finished 信号自然清理
+            finished = self._analysis_worker.wait(3000)
+            if finished:
+                self._analysis_worker = None
 
     def _start_quick_analysis(self) -> None:
         """启动快速 AI 分析"""
@@ -354,11 +356,11 @@ class MainWindow(QMainWindow):
             logger.info(f"双击包 #{pkt.index}: {pkt.summary}")
 
     def closeEvent(self, event) -> None:
+        """窗口关闭时清理所有资源"""
         if self._engine.is_capturing:
             self._engine.stop_capture()
         if hasattr(self._engine, 'cleanup'):
             self._engine.cleanup()
-        if self._analysis_worker and self._analysis_worker.isRunning():
-            self._analysis_worker.requestInterruption()
-            self._analysis_worker.wait(5000)
+        # 完整取消 AI 分析 Worker（断开信号 + 等待结束）
+        self._cancel_active_worker()
         event.accept()

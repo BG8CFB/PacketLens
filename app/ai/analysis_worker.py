@@ -102,6 +102,12 @@ class AnalysisWorker(QThread):
             logger.error(error_msg)
             self.analysis_error.emit(error_msg)
 
+        except ValueError as e:
+            # API Key 未配置等参数校验错误
+            error_msg = str(e)[:200]
+            logger.error(f"AI 分析参数错误: {error_msg}")
+            self.analysis_error.emit(error_msg)
+
         except Exception as e:
             if not self.isInterruptionRequested():
                 error_type = type(e).__name__
@@ -112,6 +118,8 @@ class AnalysisWorker(QThread):
                     user_msg = "API 调用频率超限，请稍后重试"
                 elif "context" in error_msg.lower() or "token" in error_msg.lower() or "not found" in error_msg.lower() or "404" in error_msg:
                     user_msg = "输入内容超出模型上下文窗口，请减少抓包量"
+                elif "connection" in error_msg.lower() or "network" in error_msg.lower():
+                    user_msg = "网络连接异常，请检查网络设置"
                 else:
                     user_msg = f"AI 分析失败 ({error_type}): {error_msg}"
                 logger.error(user_msg)

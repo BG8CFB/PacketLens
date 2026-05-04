@@ -143,7 +143,7 @@ class TestNormalizeCategory:
 
     def test_all_valid_categories_in_frozenset(self):
         assert VALID_CATEGORIES == frozenset({
-            "Security", "Performance", "Anomaly", "Protocol", "Configuration", "General",
+            "Security", "Performance", "Anomaly", "Protocol", "Configuration", "General", "System",
         })
 
 

@@ -163,9 +163,9 @@ class TestBPFValidatorInvalidFilters:
         assert ok is False
 
     def test_invalid_double_or(self):
-        """BPF 使用 'or' 而非 '||'"""
+        """libpcap 实际接受 '||' 作为 'or' 的别名"""
         ok, msg = validate_bpf("tcp || udp")
-        assert ok is False
+        assert ok is True  # libpcap 接受 || 语法
 
     def test_invalid_negative_port(self):
         ok, msg = validate_bpf("port -1")

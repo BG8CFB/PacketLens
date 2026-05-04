@@ -17,6 +17,15 @@ logger = logging.getLogger(__name__)
 class ReportExporter:
     """报告导出器"""
 
+    # 严重级别对应的颜色值（仅允许十六进制格式，防止注入）
+    _SEVERITY_COLORS = {
+        "Critical": "#ff4444",
+        "Warning": "#ffb020",
+        "Info": "#4488ff",
+        "Normal": "#44bb44",
+    }
+    _DEFAULT_SEVERITY_COLOR = "#cccccc"
+
     @staticmethod
     def _escape_html(text: str) -> str:
         """转义 HTML 特殊字符，防止 XSS"""
@@ -62,12 +71,9 @@ class ReportExporter:
 
     def export_html(self, session_data: dict, result: AnalysisResult) -> str:
         """导出 HTML 报告"""
-        # 简单的 HTML 包装
-        severity_colors = {"Critical": "#ff4444", "Warning": "#ffb020", "Info": "#4488ff", "Normal": "#44bb44"}
-
         issues_html = ""
         for issue in result.issues:
-            color = severity_colors.get(issue.severity, "#ccc")
+            color = self._SEVERITY_COLORS.get(issue.severity, self._DEFAULT_SEVERITY_COLOR)
             severity_esc = self._escape_html(issue.severity)
             title_esc = self._escape_html(issue.title)
             desc_esc = self._escape_html(issue.description)

@@ -11,7 +11,7 @@ from app.models.analysis_result import AnalysisIssue, AnalysisResult
 
 VALID_SEVERITIES = frozenset({"Critical", "Warning", "Info", "Normal"})
 VALID_CATEGORIES = frozenset({
-    "Security", "Performance", "Anomaly", "Protocol", "Configuration", "General",
+    "Security", "Performance", "Anomaly", "Protocol", "Configuration", "General", "System",
 })
 
 _SEVERITY_ALIASES = {

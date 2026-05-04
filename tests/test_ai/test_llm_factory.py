@@ -69,6 +69,30 @@ class TestLLMFactoryOpenAI:
         assert "openai" in registered
         assert "anthropic" in registered
 
+    def test_create_openai_with_base_url(self):
+        """ChatOpenAI 创建时 base_url 应被正确传递"""
+        llm = LLMFactory.create(
+            PROVIDER_TYPE_OPENAI,
+            api_key="test-key",
+            base_url="https://custom.api.com/v1",
+            model="test-model",
+            max_tokens=10,
+        )
+        # 验证 LLM 实例创建成功（不调用 API）
+        assert llm is not None
+
+    def test_register_custom_provider(self):
+        """应支持动态注册自定义 provider"""
+        from langchain_core.language_models.chat_models import BaseChatModel
+
+        def custom_creator(api_key, base_url, model, temperature, max_tokens,
+                           timeout, stream_usage, **kwargs):
+            # 返回 None 会触发错误，这里只验证注册机制
+            return None
+
+        LLMFactory.register_provider("custom_test", custom_creator)
+        assert "custom_test" in LLMFactory.registered_types()
+
 
 @pytest.mark.skipif(
     not _has_anthropic_key(),
