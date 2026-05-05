@@ -35,6 +35,8 @@ class FlowAggregator:
         self._lock = threading.Lock()
         self._drop_warned = False
         self._dropped_count = 0
+        # TCP seq 状态追踪（用于重传/乱序/重复ACK 检测）
+        self._tcp_seq_state: dict[str, dict] = {}
 
     def update(self, packet: PacketRecord) -> None:
         """根据数据包更新流表（线程安全）"""
@@ -66,16 +68,20 @@ class FlowAggregator:
                             )
                             self._drop_warned = True
                     self._flows[flow_key] = self._create_flow(flow_key, packet)
+                    # 清理已归档流的 TCP seq 状态
+                    self._tcp_seq_state.pop(flow_key, None)
                     return
 
                 flow.packet_count += 1
                 flow.byte_count += packet.length
                 flow.last_seen = packet.timestamp
                 if packet.flags:
-                    # 将 TCP flags 字符串（如 "SA"）拆分为单个 flag 字符（"S", "A"）
                     flow.flags_set.update(packet.flags)
                 if packet.length > self._get_min_frame_size(packet.protocol):
                     flow.has_payload = True
+                # TCP 健康度追踪
+                if packet.protocol == "TCP" and packet.tcp_seq is not None:
+                    self._track_tcp_health(flow_key, packet, flow)
             else:
                 self._flows[flow_key] = self._create_flow(flow_key, packet)
 
@@ -133,6 +139,7 @@ class FlowAggregator:
         with self._lock:
             self._flows.clear()
             self._expired_flows.clear()
+            self._tcp_seq_state.clear()
             self._drop_warned = False
             self._dropped_count = 0
 
@@ -155,6 +162,52 @@ class FlowAggregator:
         elif protocol == "ICMP":
             return ICMP_FLOW_TIMEOUT
         return DEFAULT_FLOW_TIMEOUT
+
+    def _track_tcp_health(self, flow_key: str, packet: PacketRecord, flow: FlowRecord) -> None:
+        """追踪 TCP 健康度指标（重传/零窗口/RST/重复ACK）
+
+        TCP 序列号回绕处理：使用 32 位有符号差值判断方向，
+        diff > 0 表示 seq 在前进，diff < 0 表示 seq 回退（重传或乱序）。
+        """
+        # RST 检测（不 return，继续检测零窗口）
+        if packet.flags and "R" in packet.flags:
+            flow.rst_count += 1
+
+        # 零窗口检测
+        if packet.tcp_window == 0:
+            flow.zero_window_count += 1
+
+        # RST 包不需要 seq/ack 追踪
+        if packet.flags and "R" in packet.flags:
+            return
+
+        state = self._tcp_seq_state.get(flow_key)
+        if state is None:
+            state = {"max_seq": 0, "ack_counts": {}}
+            self._tcp_seq_state[flow_key] = state
+
+        seq = packet.tcp_seq
+        has_payload = packet.length > self._get_min_frame_size("TCP")
+
+        # 重传检测：处理 32 位序列号回绕
+        diff = (seq - state["max_seq"]) & 0xFFFFFFFF
+        if diff > 0x80000000:
+            # seq 回退 → 重传或乱序（排除纯 ACK）
+            if has_payload:
+                flow.retransmit_count += 1
+        elif diff > 0:
+            state["max_seq"] = seq
+
+        # 重复 ACK 检测：同一 ack 值出现 3+ 次
+        if packet.tcp_ack is not None:
+            ack_key = packet.tcp_ack
+            count = state["ack_counts"].get(ack_key, 0) + 1
+            state["ack_counts"][ack_key] = count
+            if count == 3:
+                flow.dup_ack_count += 1
+            if len(state["ack_counts"]) > 50:
+                oldest = list(state["ack_counts"].keys())[0]
+                del state["ack_counts"][oldest]
 
     @staticmethod
     def _get_min_frame_size(protocol: str) -> int:

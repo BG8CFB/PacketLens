@@ -80,7 +80,8 @@ class ConfigManager:
 
     @property
     def config(self) -> dict:
-        return self._config.copy()
+        """返回配置的深拷贝，外部修改（含嵌套结构）不影响内部状态"""
+        return copy.deepcopy(self._config)
 
     # ── AI Provider 管理 ──
 
@@ -131,6 +132,7 @@ class ConfigManager:
             "temperature": active.get("temperature", AI_DEFAULTS["temperature"]),
             "timeout": active.get("timeout", AI_DEFAULTS["timeout"]),
             "max_concurrency": active.get("max_concurrency", AI_DEFAULTS["max_concurrency"]),
+            "max_layer2_flows": active.get("max_layer2_flows", AI_DEFAULTS["max_layer2_flows"]),
         }
 
     def set_providers(self, providers: list[dict], active_name: str) -> None:

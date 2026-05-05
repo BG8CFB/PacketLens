@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 import os
+from pathlib import Path
 
 from app.config.ai_defaults import AI_DEFAULTS
 
@@ -34,6 +35,31 @@ def _safe_float(val, default: float) -> float:
 _NOT_LOADED = object()
 # 内置 provider 缓存（首次调用后缓存，避免重复扫描环境变量）
 _builtin_provider_cache: dict | None = _NOT_LOADED  # type: ignore[assignment]
+_dotenv_loaded = False
+
+
+def _ensure_dotenv_loaded() -> None:
+    """确保 .env 已加载到当前进程环境
+
+    GUI 启动时会在 main.py 提前加载 .env，但测试、脚本或直接导入
+    ConfigManager/ProviderLoader 时不会经过 main.py，因此这里需要兜底。
+    """
+    global _dotenv_loaded
+    if _dotenv_loaded:
+        return
+
+    env_path = Path(__file__).resolve().parents[2] / ".env"
+    if not env_path.exists():
+        _dotenv_loaded = True
+        return
+
+    try:
+        from dotenv import load_dotenv
+        load_dotenv(env_path, override=False)
+    except ImportError:
+        logger.debug("python-dotenv 未安装，跳过 .env 自动加载")
+
+    _dotenv_loaded = True
 
 
 def load_builtin_provider() -> dict | None:
@@ -46,6 +72,8 @@ def load_builtin_provider() -> dict | None:
         provider dict（含 is_default=True）或 None（AI_NAME 为空时）
     """
     global _builtin_provider_cache
+    _ensure_dotenv_loaded()
+
     if _builtin_provider_cache is not _NOT_LOADED:
         return _builtin_provider_cache
 
@@ -84,8 +112,30 @@ def load_builtin_provider() -> dict | None:
             os.environ.get("AI_TIMEOUT") or AI_DEFAULTS["timeout"],
             AI_DEFAULTS["timeout"],
         ),
+        "max_concurrency": _safe_int(
+            os.environ.get("AI_MAX_CONCURRENCY") or AI_DEFAULTS["max_concurrency"],
+            AI_DEFAULTS["max_concurrency"],
+        ),
+        "max_layer2_flows": _safe_int(
+            os.environ.get("AI_MAX_LAYER2_FLOWS") or AI_DEFAULTS["max_layer2_flows"],
+            AI_DEFAULTS["max_layer2_flows"],
+        ),
         "is_default": True,
     }
 
     _builtin_provider_cache = provider
     return provider
+
+
+def reset_builtin_provider_cache() -> None:
+    """重置内置 provider 缓存，强制下次调用重新读取环境变量
+
+    用途：
+    - 测试隔离（不再依赖私有变量直接赋值）
+    - AI_* 环境变量在运行期发生变化时主动失效
+
+    注意：本函数仅重置内存缓存，不会重新加载 .env 文件。
+    若需要刷新 .env，请使用 ``dotenv.load_dotenv(override=True)``。
+    """
+    global _builtin_provider_cache
+    _builtin_provider_cache = _NOT_LOADED  # type: ignore[assignment]

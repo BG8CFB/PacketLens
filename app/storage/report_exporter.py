@@ -81,6 +81,8 @@ class ReportExporter:
                 if fa.evidence:
                     lines.append(f"- **证据**: {'; '.join(fa.evidence)}")
                 if fa.issues:
+                    # 显式父项 bullet，避免缩进列表渲染时无父项导致语义模糊
+                    lines.append(f"- **问题**:")
                     for issue in fa.issues:
                         lines.append(f"  - [{issue.severity}] {issue.title}: {issue.description}")
                 lines.append("")

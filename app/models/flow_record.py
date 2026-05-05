@@ -22,6 +22,11 @@ class FlowRecord:
     flags_set: set[str] = field(default_factory=set)
     has_payload: bool = False
     service: str | None = None  # 推断的服务名（HTTP, DNS, TLS 等）
+    # TCP 健康度计数器（仅 TCP 流有效）
+    retransmit_count: int = 0
+    zero_window_count: int = 0
+    rst_count: int = 0
+    dup_ack_count: int = 0
 
     @property
     def duration(self) -> float:
@@ -61,6 +66,10 @@ class FlowRecord:
             "flags_set": sorted(self.flags_set),
             "has_payload": self.has_payload,
             "service": self.service,
+            "retransmit_count": self.retransmit_count,
+            "zero_window_count": self.zero_window_count,
+            "rst_count": self.rst_count,
+            "dup_ack_count": self.dup_ack_count,
         }
 
     @classmethod
@@ -81,4 +90,8 @@ class FlowRecord:
             flags_set=set(flags_data) if flags_data else set(),
             has_payload=data.get("has_payload", False),
             service=data.get("service"),
+            retransmit_count=data.get("retransmit_count", 0),
+            zero_window_count=data.get("zero_window_count", 0),
+            rst_count=data.get("rst_count", 0),
+            dup_ack_count=data.get("dup_ack_count", 0),
         )

@@ -10,14 +10,17 @@ from PySide6.QtWidgets import (
     QLabel,
     QMainWindow,
     QMessageBox,
+    QSizePolicy,
     QSplitter,
     QStatusBar,
     QTabWidget,
     QTableView,
+    QTextBrowser,
     QVBoxLayout,
     QWidget,
 )
 
+from app.application import SCROLLBAR_STYLE
 from app.ai.ai_engine import AIEngine
 from app.ai.analysis_worker import AnalysisWorker
 from app.ai.component_factory import create_ai_engine, create_prompt_builder, create_result_parser
@@ -82,11 +85,15 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(central)
 
         layout = QVBoxLayout(central)
-        layout.setContentsMargins(4, 4, 4, 4)
-        layout.setSpacing(4)
+        # 主窗口留出更舒适的呼吸感，避免内容贴边
+        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setSpacing(8)
 
         # 抓包控制栏
         self._controls = CaptureControls()
+        # 工具栏高度锁定为 sizeHint，避免最大化时被 QVBoxLayout 拉高产生空白
+        # （默认 Preferred/Preferred 在大窗口下会与下方 splitter 平分多余空间）
+        self._controls.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Maximum)
         self._controls.start_requested.connect(self._start_capture)
         self._controls.stop_requested.connect(self._stop_capture)
         self._controls.set_default_duration(
@@ -94,8 +101,15 @@ class MainWindow(QMainWindow):
         )
         layout.addWidget(self._controls)
 
-        # 主分割器
-        splitter = QSplitter(Qt.Vertical)
+        # 整体水平分割器
+        main_splitter = QSplitter(Qt.Horizontal)
+        main_splitter.setChildrenCollapsible(False)
+        main_splitter.setHandleWidth(6)
+
+        # 左侧：包列表与底部 Tabs 的垂直分割器
+        left_splitter = QSplitter(Qt.Vertical)
+        left_splitter.setChildrenCollapsible(False)
+        left_splitter.setHandleWidth(6)
 
         # 上方：包列表
         self._table_view = PacketTableView()
@@ -103,16 +117,12 @@ class MainWindow(QMainWindow):
         self._table_view.set_model_columns_width()
         self._table_view.packet_selected.connect(self._on_packet_selected)
         self._table_view.packet_double_clicked.connect(self._on_packet_double_clicked)
-        splitter.addWidget(self._table_view)
+        left_splitter.addWidget(self._table_view)
 
-        # 下方：标签页
+        # 下方：标签页 (流聚合, 统计摘要, 包详情)
         self._bottom_tabs = QTabWidget()
-
-        # AI 分析 Tab（默认选中）
-        self._analysis_panel = AnalysisPanel()
-        self._analysis_panel.deep_analysis_button.clicked.connect(self._start_deep_analysis)
-        self._analysis_panel.reanalyze_button.clicked.connect(self._start_quick_analysis)
-        self._bottom_tabs.addTab(self._analysis_panel, "AI 分析")
+        self._bottom_tabs.setDocumentMode(True)
+        self._bottom_tabs.setMinimumHeight(200)
 
         # 流列表 Tab
         self._flow_view = QTableView()
@@ -121,23 +131,41 @@ class MainWindow(QMainWindow):
         self._flow_view.setShowGrid(False)
         self._flow_view.verticalHeader().hide()
         self._flow_view.setSelectionBehavior(QTableView.SelectRows)
+        self._flow_view.setSelectionMode(QTableView.SingleSelection)
+        self._flow_view.setSortingEnabled(True)
+        self._flow_view.horizontalHeader().setStretchLastSection(True)
+        self._flow_view.horizontalHeader().setMinimumSectionSize(60)
+        self._flow_view.setStyleSheet(SCROLLBAR_STYLE)
         self._bottom_tabs.addTab(self._flow_view, "流聚合")
 
         # 统计摘要 Tab
-        self._stats_label = QLabel("抓包完成后显示统计信息")
-        self._stats_label.setWordWrap(True)
-        self._stats_label.setStyleSheet("padding: 12px; font-size: 14px;")
+        self._stats_label = QTextBrowser()
+        self._stats_label.setOpenExternalLinks(True)
+        self._stats_label.setHtml("抓包完成后显示统计信息")
+        self._stats_label.setStyleSheet("padding: 10px; font-size: 13px;" + SCROLLBAR_STYLE)
         self._bottom_tabs.addTab(self._stats_label, "统计摘要")
 
         # 包详情 Tab
         self._detail_panel = PacketDetailPanel()
         self._bottom_tabs.addTab(self._detail_panel, "包详情")
 
-        splitter.addWidget(self._bottom_tabs)
-        splitter.setStretchFactor(0, 1)
-        splitter.setStretchFactor(1, 1)
+        left_splitter.addWidget(self._bottom_tabs)
+        left_splitter.setStretchFactor(0, 2)
+        left_splitter.setStretchFactor(1, 1)
 
-        layout.addWidget(splitter)
+        # 右侧：AI 分析面板 (独立显示)
+        self._analysis_panel = AnalysisPanel()
+        self._analysis_panel.deep_analysis_button.clicked.connect(self._start_deep_analysis)
+        self._analysis_panel.reanalyze_button.clicked.connect(self._start_quick_analysis)
+
+        main_splitter.addWidget(left_splitter)
+        main_splitter.addWidget(self._analysis_panel)
+        main_splitter.setStretchFactor(0, 2)
+        main_splitter.setStretchFactor(1, 1)
+        main_splitter.setSizes([800, 400])
+
+        # stretch=1 让分割器吸收所有剩余垂直空间，避免最大化时出现工具栏与表格之间的空白
+        layout.addWidget(main_splitter, 1)
 
     def _setup_status_bar(self) -> None:
         self._status_bar = QStatusBar()
@@ -149,6 +177,20 @@ class MainWindow(QMainWindow):
         settings_menu = menubar.addMenu("设置")
         settings_action = settings_menu.addAction("配置")
         settings_action.triggered.connect(self._open_settings)
+
+        help_menu = menubar.addMenu("帮助")
+        about_action = help_menu.addAction("关于 PacketLens")
+        about_action.triggered.connect(self._show_about)
+
+    def _show_about(self) -> None:
+        QMessageBox.about(
+            self,
+            "关于 PacketLens",
+            "<h3>PacketLens</h3>"
+            "<p>Windows 桌面抓包 + AI 流量分析工具</p>"
+            "<p>基于 Python 3.11 / PySide6 / Scapy / LangChain</p>"
+            "<p>版本: 0.1.0</p>",
+        )
 
     def _open_settings(self) -> None:
         dialog = SettingsDialog(self._config, parent=self)
@@ -222,7 +264,6 @@ class MainWindow(QMainWindow):
 
         self._cancel_active_worker()
         self._analysis_panel.set_loading()
-        self._bottom_tabs.setCurrentIndex(0)  # 切换到 AI 分析 Tab
         self._status_bar.showMessage("AI 快速分析中...")
 
         ai_cfg = self._config.get_ai_config()
@@ -238,6 +279,7 @@ class MainWindow(QMainWindow):
             temperature=ai_cfg["temperature"],
             max_tokens=ai_cfg["max_tokens"],
             max_concurrency=ai_cfg["max_concurrency"],
+            max_layer2_flows=ai_cfg["max_layer2_flows"],
         )
         self._analysis_worker.analysis_progress.connect(self._on_analysis_progress)
         self._analysis_worker.analysis_completed.connect(self._on_analysis_completed)
@@ -253,7 +295,6 @@ class MainWindow(QMainWindow):
 
         self._cancel_active_worker()
         self._analysis_panel.set_loading()
-        self._bottom_tabs.setCurrentIndex(0)
         self._status_bar.showMessage("AI 深度分析中...")
 
         ai_cfg = self._config.get_ai_config()
@@ -269,6 +310,7 @@ class MainWindow(QMainWindow):
             temperature=ai_cfg["temperature"],
             max_tokens=ai_cfg["max_tokens"],
             max_concurrency=ai_cfg["max_concurrency"],
+            max_layer2_flows=ai_cfg["max_layer2_flows"],
         )
         self._analysis_worker.analysis_progress.connect(self._on_analysis_progress)
         self._analysis_worker.analysis_completed.connect(self._on_analysis_completed)
@@ -281,7 +323,7 @@ class MainWindow(QMainWindow):
     def _on_capture_started(self) -> None:
         self._controls.set_capturing(True)
         self._flow_model.clear()
-        self._stats_label.setText("抓包进行中...")
+        self._stats_label.setHtml("抓包进行中...")
 
     def _on_capture_stopped(self, total: int) -> None:
         self._controls.set_capturing(False)
@@ -299,9 +341,19 @@ class MainWindow(QMainWindow):
         QMessageBox.critical(self, "抓包错误", error)
         self._status_bar.showMessage(f"错误: {error}")
 
-    def _on_preprocessing_done(self, stats: dict) -> None:
-        """预处理完成：更新 UI 并自动触发快速分析"""
-        self._flow_model.set_flows(self._engine.flows)
+    def _on_preprocessing_done(self, payload: dict) -> None:
+        """预处理完成：更新 UI 并自动触发快速分析
+
+        payload 由 CaptureEngine 提供，结构：
+            {"flows": [...], "stats": {...}, "anomalies": [...]}
+        优先使用 payload 而非读取 self._engine.* 共享状态，避免跨线程可见性疑虑。
+        旧版本只传 stats 的兼容路径已废弃（CaptureEngine 与 MainWindow 同仓库迭代）。
+        """
+        flows = payload.get("flows", [])
+        stats = payload.get("stats", {})
+        anomalies = payload.get("anomalies", [])
+
+        self._flow_model.set_flows(flows)
 
         # 更新统计摘要
         lines = [
@@ -317,13 +369,12 @@ class MainWindow(QMainWindow):
         for proto, count in stats.get("protocol_distribution", {}).items():
             lines.append(f"  {proto}: {count}<br>")
 
-        anomalies = self._engine.anomalies
         if anomalies:
             lines.append(f"<br><b>异常检测</b> ({len(anomalies)} 项)<br>")
             for a in anomalies:
                 lines.append(f"  [{a['severity']}] {a['description']}<br>")
 
-        self._stats_label.setText("".join(lines))
+        self._stats_label.setHtml("".join(lines))
 
         # 根据配置决定是否自动触发快速分析
         if self._config.get("auto_analyze", True):

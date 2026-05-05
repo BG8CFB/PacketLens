@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QLabel, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QHBoxLayout, QLabel, QVBoxLayout, QWidget
 
 from app.constants import SEVERITY_COLORS
 from app.models.analysis_result import AnalysisIssue
@@ -28,28 +28,44 @@ class AnalysisResultWidget(QWidget):
         self.setStyleSheet(self._card_style())
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(12, 8, 12, 8)
-        layout.setSpacing(4)
+        layout.setContentsMargins(14, 12, 14, 12)
+        layout.setSpacing(8)
 
-        # 标题行：严重级别 + 标题（始终可见）
-        title_layout = QVBoxLayout()
+        # 标题行：严重级别 + 标题 + 折叠提示
+        title_row = QHBoxLayout()
+        title_row.setContentsMargins(0, 0, 0, 0)
+        title_row.setSpacing(8)
 
         severity_color = SEVERITY_COLORS.get(issue.severity, "#CCCCCC")
 
-        # 严重级别标签
-        severity_label = QLabel(f"[{issue.severity}]")
+        severity_label = QLabel(issue.severity)
         severity_label.setStyleSheet(
-            f"color: {severity_color}; font-weight: bold; font-size: 12px; border: none;"
+            f"color: {severity_color}; font-weight: bold; font-size: 11px; border: none;"
+            f"background-color: rgba(0, 0, 0, 0.18); padding: 3px 8px; border-radius: 10px;"
         )
-        title_layout.addWidget(severity_label)
+        title_row.addWidget(severity_label, 0, Qt.AlignTop)
 
-        # 标题
+        title_block = QVBoxLayout()
+        title_block.setContentsMargins(0, 0, 0, 0)
+        title_block.setSpacing(4)
+
         title = QLabel(issue.title)
-        title.setStyleSheet("font-weight: bold; font-size: 14px; border: none;")
+        title.setStyleSheet("font-weight: bold; font-size: 14px; border: none; color: #cdd6f4;")
         title.setWordWrap(True)
-        title_layout.addWidget(title)
+        title_block.addWidget(title)
 
-        layout.addLayout(title_layout)
+        category_text = issue.category or "未分类"
+        category_label = QLabel(f"分类: {category_text}")
+        category_label.setStyleSheet("color: #a6adc8; font-size: 11px; border: none;")
+        title_block.addWidget(category_label)
+
+        title_row.addLayout(title_block, 1)
+
+        self._expand_hint = QLabel("点击收起")
+        self._expand_hint.setStyleSheet("color: #6c7086; font-size: 11px; border: none;")
+        title_row.addWidget(self._expand_hint, 0, Qt.AlignTop)
+
+        layout.addLayout(title_row)
 
         # 详情容器（初始隐藏）
         self._detail_widget = QWidget()
@@ -60,14 +76,17 @@ class AnalysisResultWidget(QWidget):
         # 描述
         desc = QLabel(issue.description)
         desc.setWordWrap(True)
-        desc.setStyleSheet("color: #bac2de; font-size: 13px; border: none;")
+        desc.setStyleSheet("color: #bac2de; font-size: 13px; line-height: 1.5; border: none;")
         detail_layout.addWidget(desc)
 
         # 建议（如果有）
         if issue.recommendation:
             rec_label = QLabel(f"建议: {issue.recommendation}")
             rec_label.setWordWrap(True)
-            rec_label.setStyleSheet("color: #a6e3a1; font-size: 12px; border: none;")
+            rec_label.setStyleSheet(
+                "color: #a6e3a1; font-size: 12px; border: none;"
+                "background-color: rgba(166, 227, 161, 0.08); padding: 6px 8px; border-radius: 4px;"
+            )
             detail_layout.addWidget(rec_label)
 
         # 受影响的流（可展开）
@@ -129,6 +148,7 @@ class AnalysisResultWidget(QWidget):
         if event.button() == Qt.LeftButton:
             self._expanded = not self._expanded
             self._detail_widget.setVisible(self._expanded)
+            self._expand_hint.setText("点击收起" if self._expanded else "点击展开")
         super().mousePressEvent(event)
 
     def _card_style(self) -> str:
@@ -141,6 +161,6 @@ class AnalysisResultWidget(QWidget):
             f"  border-top: 1px solid #313244;"
             f"  border-right: 1px solid #313244;"
             f"  border-bottom: 1px solid {severity_color};"
-            f"  border-radius: 4px;"
+            f"  border-radius: 6px;"
             f"}}"
         )

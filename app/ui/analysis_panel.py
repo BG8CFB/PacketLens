@@ -5,7 +5,10 @@ from __future__ import annotations
 import logging
 
 from PySide6.QtCore import QTimer, Qt
+from PySide6.QtGui import QTextCursor
 from PySide6.QtWidgets import (
+    QFrame,
+    QHBoxLayout,
     QLabel,
     QPushButton,
     QScrollArea,
@@ -14,6 +17,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from app.application import SCROLLBAR_STYLE
 from app.constants import SEVERITY_COLORS
 from app.models.analysis_result import AnalysisResult
 from app.ui.analysis_result_widget import AnalysisResultWidget
@@ -41,30 +45,82 @@ class AnalysisPanel(QWidget):
         self._stage_base_text = ""
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(8, 8, 8, 8)
-        layout.setSpacing(8)
+        layout.setContentsMargins(10, 10, 10, 10)
+        layout.setSpacing(10)
 
-        # 概览标签
-        self._summary_label = QLabel("等待分析...")
-        self._summary_label.setWordWrap(True)
-        self._summary_label.setStyleSheet("font-size: 14px; padding: 8px;")
-        layout.addWidget(self._summary_label)
+        header_card = QFrame()
+        header_card.setStyleSheet(
+            "QFrame {"
+            "  background-color: #181825;"
+            "  border: 1px solid #313244;"
+            "  border-radius: 8px;"
+            "}"
+        )
+        header_layout = QVBoxLayout(header_card)
+        header_layout.setContentsMargins(12, 10, 12, 10)
+        header_layout.setSpacing(6)
 
-        # 阶段标签（显示当前分析阶段）
+        title_row = QHBoxLayout()
+        title_row.setContentsMargins(0, 0, 0, 0)
+        title_row.setSpacing(8)
+
+        title_label = QLabel("AI 流量分析")
+        title_label.setStyleSheet("font-size: 16px; font-weight: bold; color: #cdd6f4;")
+        title_row.addWidget(title_label)
+
+        title_row.addStretch()
+        header_layout.addLayout(title_row)
+
+        # 阶段标签独占一行：避免与标题挤在同一水平槽里被压缩，也不再硬限制 maxHeight
+        # （此前 setMaximumHeight(24) + wordWrap=True 会把长文本裁成半截字）
         self._stage_label = QLabel("")
         self._stage_label.setWordWrap(True)
-        self._stage_label.setMaximumHeight(24)
         self._stage_label.setStyleSheet(
-            "font-size: 12px; color: #89b4fa; padding: 2px 8px;"
+            "font-size: 12px; color: #89b4fa; padding: 4px 10px;"
+            "background-color: #11111b; border-radius: 10px;"
         )
         self._stage_label.setVisible(False)
-        layout.addWidget(self._stage_label)
+        header_layout.addWidget(self._stage_label)
+
+        self._summary_label = QLabel("等待分析...")
+        self._summary_label.setWordWrap(True)
+        self._summary_label.setStyleSheet("font-size: 14px; color: #cdd6f4; margin-top: 4px; margin-bottom: 4px;")
+        header_layout.addWidget(self._summary_label)
+
+        self._stats_label = QLabel("")
+        self._stats_label.setWordWrap(True)
+        self._stats_label.setStyleSheet(
+            "font-size: 12px; color: #a6adc8; padding: 8px 10px;"
+            "background-color: #11111b; border-radius: 6px;"
+        )
+        header_layout.addWidget(self._stats_label)
+
+        actions_layout = QHBoxLayout()
+        actions_layout.setContentsMargins(0, 0, 0, 0)
+        actions_layout.setSpacing(10)
+
+        self._deep_btn = QPushButton("深度分析")
+        self._deep_btn.setEnabled(False)
+        self._deep_btn.setStyleSheet(
+            "QPushButton { background-color: #f38ba8; color: #1e1e2e; }"
+            "QPushButton:hover { background-color: #eba0ac; }"
+            "QPushButton:disabled { background-color: #45475a; color: #6c7086; }"
+        )
+        actions_layout.addWidget(self._deep_btn)
+
+        self._reanalyze_btn = QPushButton("重新分析")
+        self._reanalyze_btn.setEnabled(False)
+        actions_layout.addWidget(self._reanalyze_btn)
+        actions_layout.addStretch()
+        header_layout.addLayout(actions_layout)
+
+        layout.addWidget(header_card)
 
         # 流式输出可折叠标题
         self._stream_toggle = QLabel("▶ AI 思考过程（点击展开）")
         self._stream_toggle.setStyleSheet(
-            "font-size: 12px; color: #6c7086; padding: 4px 8px; "
-            "border: 1px solid #313244; border-radius: 4px; background-color: #181825;"
+            "font-size: 12px; color: #a6adc8; padding: 6px 10px; "
+            "border: 1px solid #313244; border-radius: 6px; background-color: #181825;"
         )
         self._stream_toggle.setCursor(Qt.PointingHandCursor)
         self._stream_toggle.mousePressEvent = self._toggle_stream
@@ -74,6 +130,7 @@ class AnalysisPanel(QWidget):
         # 流式输出区域
         self._stream_output = QTextEdit()
         self._stream_output.setReadOnly(True)
+        self._stream_output.setMinimumHeight(100)
         self._stream_output.setMaximumHeight(300)
         self._stream_output.setLineWrapMode(QTextEdit.WidgetWidth)
         self._stream_output.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
@@ -81,52 +138,38 @@ class AnalysisPanel(QWidget):
             "QTextEdit {"
             "  background-color: #181825;"
             "  border: 1px solid #313244;"
-            "  border-radius: 4px;"
+            "  border-radius: 6px;"
             "  color: #a6adc8;"
             "  font-family: 'Consolas', 'Microsoft YaHei', monospace;"
             "  font-size: 12px;"
-            "  padding: 6px;"
+            "  padding: 8px;"
             "}"
+            + SCROLLBAR_STYLE
         )
         self._stream_output.setVisible(False)
         layout.addWidget(self._stream_output)
 
-        # 统计标签
-        self._stats_label = QLabel("")
-        self._stats_label.setWordWrap(True)
-        self._stats_label.setStyleSheet("font-size: 12px; color: #6c7086; padding: 4px;")
-        layout.addWidget(self._stats_label)
+        results_title = QLabel("风险发现")
+        results_title.setStyleSheet("font-size: 14px; font-weight: bold; color: #cdd6f4; margin-top: 8px;")
+        layout.addWidget(results_title)
 
         # 结果卡片滚动区
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
-        scroll.setStyleSheet("QScrollArea { border: none; }")
+        scroll.setMinimumHeight(150)
+        scroll.setStyleSheet(
+            "QScrollArea { border: none; background-color: transparent; }"
+            + SCROLLBAR_STYLE
+        )
 
         self._cards_container = QWidget()
+        self._cards_container.setStyleSheet("QWidget { background-color: transparent; }")
         self._cards_layout = QVBoxLayout(self._cards_container)
         self._cards_layout.setSpacing(8)
         self._cards_layout.addStretch()
 
         scroll.setWidget(self._cards_container)
         layout.addWidget(scroll, stretch=1)
-
-        # 操作按钮
-        btn_layout = QVBoxLayout()
-
-        self._deep_btn = QPushButton("深度分析")
-        self._deep_btn.setEnabled(False)
-        self._deep_btn.setStyleSheet(
-            "QPushButton { background-color: #f38ba8; color: #1e1e2e; }"
-            "QPushButton:hover { background-color: #eba0ac; }"
-            "QPushButton:disabled { background-color: #45475a; color: #6c7086; }"
-        )
-        btn_layout.addWidget(self._deep_btn)
-
-        self._reanalyze_btn = QPushButton("重新分析")
-        self._reanalyze_btn.setEnabled(False)
-        btn_layout.addWidget(self._reanalyze_btn)
-
-        layout.addLayout(btn_layout)
 
         # 思考动画定时器
         self._thinking_timer = QTimer(self)
@@ -147,7 +190,7 @@ class AnalysisPanel(QWidget):
     def set_loading(self) -> None:
         """设置为加载状态"""
         self._summary_label.setText("AI 分析中...")
-        self._summary_label.setStyleSheet("font-size: 14px; padding: 8px;")
+        self._summary_label.setStyleSheet("font-size: 14px; color: #cdd6f4; margin-top: 4px; margin-bottom: 4px;")
         self._stream_text = ""
         self._stream_output.clear()
         self._stream_output.setVisible(True)
@@ -168,8 +211,8 @@ class AnalysisPanel(QWidget):
         self._stream_toggle.hide()
         self._stage_label.setVisible(False)
         self._summary_label.setText(f"分析失败: {error[:200]}")
-        self._summary_label.setStyleSheet("font-size: 14px; padding: 8px; color: #FF4444;")
-        self._stats_label.setText("")
+        self._summary_label.setStyleSheet("font-size: 14px; color: #FF4444; margin-top: 4px; margin-bottom: 4px;")
+        self._stats_label.setText("请检查模型配置、网络连通性或 API 返回结果后再试。")
         self._deep_btn.setEnabled(True)
         self._reanalyze_btn.setEnabled(True)
         self._stream_text = ""
@@ -182,7 +225,7 @@ class AnalysisPanel(QWidget):
             self._stream_output.setPlainText(self._stream_text)
         else:
             cursor = self._stream_output.textCursor()
-            cursor.movePosition(cursor.End)
+            cursor.movePosition(QTextCursor.MoveOperation.End)
             cursor.insertText(chunk)
 
         scrollbar = self._stream_output.verticalScrollBar()
@@ -201,6 +244,7 @@ class AnalysisPanel(QWidget):
 
         # 折叠流式输出，但保持可访问
         self._stream_output.setVisible(False)
+        self._stream_expanded = False
         if self._stream_text:
             char_count = len(self._stream_text)
             self._stream_toggle.setText(
@@ -213,7 +257,8 @@ class AnalysisPanel(QWidget):
         # 阶段标签显示完成状态
         self._stage_label.setText("分析完成")
         self._stage_label.setStyleSheet(
-            "font-size: 12px; color: #a6e3a1; padding: 2px 8px;"
+            "font-size: 12px; color: #a6e3a1; padding: 4px 10px;"
+            "background-color: #11111b; border-radius: 10px;"
         )
 
         # 概览
@@ -265,12 +310,24 @@ class AnalysisPanel(QWidget):
     def _toggle_stream(self, event=None) -> None:
         """切换流式输出的展开/折叠"""
         self._stream_expanded = not self._stream_expanded
+
+        char_count = len(self._stream_text) if self._stream_text else 0
+
         if self._stream_expanded:
+            # 展开：确保文本与 _stream_text 同步（防止跨线程信号时序导致的遗漏）
+            if self._stream_text and self._stream_output.toPlainText() != self._stream_text:
+                self._stream_output.setPlainText(self._stream_text)
             self._stream_output.setVisible(True)
-            self._stream_toggle.setText("▼ AI 思考过程（点击收起）")
+            if char_count > 0:
+                self._stream_toggle.setText(f"▼ AI 思考过程（{char_count:,} 字符，点击收起）")
+            else:
+                self._stream_toggle.setText("▼ AI 思考过程（点击收起）")
         else:
             self._stream_output.setVisible(False)
-            self._stream_toggle.setText("▶ AI 思考过程（点击展开）")
+            if char_count > 0:
+                self._stream_toggle.setText(f"▶ AI 思考过程（{char_count:,} 字符，点击展开查看原始输出）")
+            else:
+                self._stream_toggle.setText("▶ AI 思考过程（点击展开）")
 
     def _start_thinking_animation(self) -> None:
         """启动思考动画"""

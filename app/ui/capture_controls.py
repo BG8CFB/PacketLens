@@ -5,10 +5,12 @@ from __future__ import annotations
 import logging
 from datetime import datetime
 
-from PySide6.QtCore import QTimer, Signal
+from PySide6.QtCore import QTimer, Qt, Signal
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
+    QFrame,
+    QGridLayout,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -17,7 +19,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from app.constants import DEFAULT_CAPTURE_DURATION, MAX_CAPTURE_DURATION, MIN_CAPTURE_DURATION
+from app.constants import DEFAULT_CAPTURE_DURATION
 from app.models.nic_info import NICInfo
 
 logger = logging.getLogger(__name__)
@@ -37,58 +39,88 @@ class CaptureControls(QWidget):
         self._is_capturing = False
         self._start_time: datetime | None = None
 
-        layout = QHBoxLayout(self)
-        layout.setContentsMargins(8, 4, 8, 4)
+        self.setObjectName("captureControls")
+        self.setStyleSheet(
+            "#captureControls {"
+            "  background-color: #181825;"
+            "  border: 1px solid #313244;"
+            "  border-radius: 8px;"
+            "}"
+            "QCheckBox { spacing: 6px; }"
+            "QCheckBox::indicator {"
+            "  width: 18px; height: 18px;"
+            "  border-radius: 4px;"
+            "  border: 2px solid #585b70;"
+            "  background-color: transparent;"
+            "}"
+            "QCheckBox::indicator:hover { border-color: #a6e3a1; }"
+            "QCheckBox::indicator:checked {"
+            "  background-color: #a6e3a1;"
+            "  border: 2px solid #a6e3a1;"
+            "}"
+            "QCheckBox::indicator:checked:hover {"
+            "  background-color: #b9f0bc;"
+            "  border-color: #b9f0bc;"
+            "}"
+        )
 
-        # 网卡选择
-        layout.addWidget(QLabel("网卡:"))
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(12, 10, 12, 10)
+        layout.setSpacing(12)
+
+        nic_label = QLabel("采集网卡")
+        nic_label.setStyleSheet("font-weight: bold; color: #a6adc8;")
+        layout.addWidget(nic_label)
+
         self._nic_combo = QComboBox()
-        self._nic_combo.setMinimumWidth(250)
+        self._nic_combo.setMinimumWidth(240)
         layout.addWidget(self._nic_combo)
 
-        # BPF 过滤器
-        layout.addWidget(QLabel("BPF:"))
-        self._bpf_input = QLineEdit()
-        self._bpf_input.setPlaceholderText("例: port 80, host 192.168.1.1")
-        self._bpf_input.setMinimumWidth(180)
-        layout.addWidget(self._bpf_input)
+        duration_label = QLabel("抓包时长")
+        duration_label.setStyleSheet("font-weight: bold; color: #a6adc8;")
+        layout.addWidget(duration_label)
 
-        # 时长
-        layout.addWidget(QLabel("时长:"))
         self._duration_combo = QComboBox()
-        self._duration_combo.addItems(
-            ["10秒", "30秒", "60秒", "120秒", "300秒"]
-        )
+        self._duration_combo.addItems(["10秒", "30秒", "60秒", "120秒", "300秒"])
         self._duration_combo.setCurrentIndex(2)  # 默认 60秒
         self._duration_combo.setMinimumWidth(80)
         layout.addWidget(self._duration_combo)
 
-        # 混杂模式
         self._promisc_cb = QCheckBox("混杂模式")
         self._promisc_cb.setChecked(True)
         self._promisc_cb.setToolTip("启用混杂模式可捕获非本机流量")
         layout.addWidget(self._promisc_cb)
 
-        # 开始/停止按钮
+        bpf_label = QLabel("过滤规则")
+        bpf_label.setStyleSheet("font-weight: bold; color: #a6adc8;")
+        layout.addWidget(bpf_label)
+
+        self._bpf_input = QLineEdit()
+        self._bpf_input.setPlaceholderText("例: tcp port 443 / host 192.168.1.1")
+        self._bpf_input.setMinimumWidth(200)
+        layout.addWidget(self._bpf_input, stretch=1)
+
         self._start_btn = QPushButton("开始抓包")
-        self._start_btn.setMinimumWidth(100)
+        self._start_btn.setMinimumWidth(110)
         self._start_btn.clicked.connect(self._on_toggle)
         layout.addWidget(self._start_btn)
 
-        # 状态标签
         self._status_label = QLabel("就绪")
+        self._status_label.setStyleSheet("font-weight: bold;")
+        self._status_label.setMinimumWidth(60)
         layout.addWidget(self._status_label)
 
-        # 已用时间标签
         self._elapsed_label = QLabel("")
+        self._elapsed_label.setMinimumWidth(40)
+        self._elapsed_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        self._elapsed_label.setStyleSheet("color: #89b4fa; font-weight: bold;")
         layout.addWidget(self._elapsed_label)
-
-        layout.addStretch()
 
         # 已用时间更新定时器
         self._elapsed_timer = QTimer()
         self._elapsed_timer.setInterval(1000)
         self._elapsed_timer.timeout.connect(self._update_elapsed)
+
 
     def populate_nics(self, nics: list[NICInfo]) -> None:
         """填充网卡列表"""

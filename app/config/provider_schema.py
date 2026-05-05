@@ -22,6 +22,7 @@ _PROVIDER_SCHEMA_FIELDS = (
     "temperature",
     "timeout",
     "max_concurrency",
+    "max_layer2_flows",
 )
 
 # 需要清理的旧字段名（仅 max_output_tokens，已重命名为 max_tokens）
@@ -32,10 +33,10 @@ def ensure_provider_schema(config: dict) -> bool:
     """确保 config 中的 ai_providers 列表符合当前 schema
 
     执行以下操作：
-    1. 将内置 provider（来自 .env）插入列表头部
+    1. 将内置 provider（来自 .env）插入列表头部，并把已经过期的旧内置降级
     2. 为所有 provider 补全缺失字段
     3. 清理已废弃的旧字段名
-    4. 校验 ai_active_provider 指向有效的 provider
+    4. 若 .env 内置 provider 发生切换，强切 active；否则做常规校验
 
     Args:
         config: 完整的配置 dict（就地修改）
@@ -47,40 +48,64 @@ def ensure_provider_schema(config: dict) -> bool:
     providers = config.get("ai_providers", [])
     builtin = load_builtin_provider()
 
-    # 1. 插入或更新内置 provider
+    builtin_changed = False
     if builtin:
-        dirty |= _merge_builtin_provider(providers, builtin)
+        merge_dirty, builtin_changed = _merge_builtin_provider(providers, builtin)
+        dirty |= merge_dirty
         config["ai_providers"] = providers
 
-    # 2. 为所有 provider 补全缺失字段
     dirty |= _backfill_schema_fields(providers)
-
-    # 3. 清理废弃字段
     dirty |= _remove_deprecated_fields(providers)
 
-    # 4. 校验 active_provider 引用
-    dirty |= _validate_active_provider(config, providers)
+    if builtin and builtin_changed:
+        # .env 内置 provider 名称发生变化，强切 active 到新 builtin
+        if config.get("ai_active_provider") != builtin["name"]:
+            config["ai_active_provider"] = builtin["name"]
+            dirty = True
+    else:
+        dirty |= _validate_active_provider(config, providers)
 
     return dirty
 
 
-def _merge_builtin_provider(providers: list[dict], builtin: dict) -> bool:
-    """将内置 provider 合并到列表中（按 name 匹配）"""
+def _merge_builtin_provider(providers: list[dict], builtin: dict) -> tuple[bool, bool]:
+    """将内置 provider 合并到列表中
+
+    - 若 builtin name 已存在 → 标记 is_default=True
+    - 若不存在 → 插入到列表头部
+    - 同时把列表中其他被标记 is_default=True、但 name 与当前 builtin 不一致的
+      旧内置 provider 降级为普通 provider（保留 key 让用户在 UI 内继续使用/手动删除）
+
+    Returns:
+        (dirty, builtin_changed)：
+            dirty 表示是否产生变更；
+            builtin_changed 表示当前 builtin 与上次启动时的内置 provider 不一致
+            （新插入 or 检测到旧 is_default 被降级）。
+    """
     dirty = False
+    builtin_changed = False
     name = builtin["name"]
     found = False
+
     for p in providers:
         if p["name"] == name:
             if not p.get("is_default"):
                 p["is_default"] = True
                 dirty = True
             found = True
-            break
+        elif p.get("is_default"):
+            # 旧 builtin 与当前 .env 不一致 → 降级，避免出现多个 is_default
+            p["is_default"] = False
+            dirty = True
+            builtin_changed = True
+
     if not found:
         import copy
         providers.insert(0, copy.deepcopy(builtin))
         dirty = True
-    return dirty
+        builtin_changed = True
+
+    return dirty, builtin_changed
 
 
 def _backfill_schema_fields(providers: list[dict]) -> bool:

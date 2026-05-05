@@ -20,6 +20,10 @@ from app.models.packet_record import PacketRecord
 from app.preprocessing.flow_aggregator import FlowAggregator
 from app.preprocessing.stats_computer import StatsComputer
 from app.preprocessing.anomaly_marker import AnomalyMarker
+from app.preprocessing.storm.storm_detector import StormDetector
+from app.preprocessing.storm.counter import StormCounter
+from app.preprocessing.fault.fault_detector import FaultDetector
+from app.preprocessing.fault.counter import FaultCounter
 from app.ui.packet_table_model import PacketTableModel
 from app.utils.path_helpers import get_captures_dir
 
@@ -69,6 +73,10 @@ class CaptureEngine:
         self._flow_aggregator = FlowAggregator()
         self._stats_computer = StatsComputer()
         self._anomaly_marker = AnomalyMarker()
+        self._storm_detector = StormDetector()
+        self._storm_counter = StormCounter()
+        self._fault_detector = FaultDetector()
+        self._fault_counter = FaultCounter()
 
         self._stop_lock = threading.Lock()
         self._capture_active = threading.Event()
@@ -163,6 +171,8 @@ class CaptureEngine:
         self._running_total_bytes = 0
         self._running_first_ts = None
         self._running_last_ts = None
+        self._storm_counter.reset()
+        self._fault_counter.reset()
 
         # 生成 PCAP 文件路径
         timestamp = self._start_time.strftime("%Y%m%d_%H%M%S")
@@ -217,9 +227,18 @@ class CaptureEngine:
 
             # 停止抓包线程
             dropped = 0
+            sniff_clean_stop = True
             if self._sniff_thread:
-                self._sniff_thread.stop(timeout=5.0)
+                sniff_clean_stop = self._sniff_thread.stop(timeout=5.0)
                 dropped = self._sniff_thread.dropped_count
+                if not sniff_clean_stop:
+                    # 线程未在超时内退出。daemon 线程会被进程回收，但当前会话内
+                    # 仍持有网卡资源；上报后继续走预处理流程，避免 UI 卡死。
+                    logger.error("抓包线程超时未停止，可能仍持有网卡资源")
+                    self._signals.capture_error.emit(
+                        "抓包线程未在 5 秒内停止，可能仍占用网卡。"
+                        "建议保存当前结果后重启应用。"
+                    )
                 self._sniff_thread = None
 
             # 最后一次轮询，确保所有包被处理
@@ -249,6 +268,10 @@ class CaptureEngine:
             self._preprocess_timer.setInterval(50)
 
             def _on_preprocess_done():
+                # 仅在 future 完成时处理结果，避免在主线程上阻塞调用 future.result()。
+                # QTimer 以 50ms 周期轮询，未完成时直接返回继续等待下一次 tick。
+                if not future.done():
+                    return
                 self._preprocess_timer.stop()
                 self._preprocess_timer = None
                 try:
@@ -269,7 +292,22 @@ class CaptureEngine:
         """QTimer 轮询回调：从 capture_queue 批量取出包并更新模型和流聚合
 
         单次轮询最多处理 POLL_BATCH_SIZE 个包，防止队列积压时阻塞主线程。
+        同时检测 PCAP 写入异常（如体积超限），及时停止抓包避免 SniffThread
+        继续生产但 PCAPWriter 已失效导致包静默丢失。
         """
+        # PCAP 写入异常时主动停止抓包，避免静默丢包
+        if (
+            self._capture_active.is_set()
+            and self._pcap_writer is not None
+            and self._pcap_writer.error is not None
+        ):
+            err_msg = self._pcap_writer.error
+            logger.warning(f"PCAP 写入异常，自动停止抓包: {err_msg}")
+            self._signals.capture_error.emit(f"PCAP 写入异常: {err_msg}")
+            # 通过信号请求停止；stop_capture 自身有 _stop_lock 防重入
+            self._signals._stop_requested.emit()
+            return
+
         batch: list[PacketRecord] = []
         max_batch = 1000  # 单次轮询批量上限，防止主线程卡顿
         while len(batch) < max_batch:
@@ -297,14 +335,21 @@ class CaptureEngine:
                 if self._running_first_ts is None:
                     self._running_first_ts = pkt.timestamp
                 self._running_last_ts = pkt.timestamp
+                self._storm_counter.update(pkt)
+                self._fault_counter.update(pkt)
 
     def _run_preprocessing(self) -> None:
-        """执行批量预处理（抓包停止后）"""
-        self._flows = self._flow_aggregator.get_flows()
+        """执行批量预处理（抓包停止后）
+
+        在工作线程中执行，先把结果计算到本地变量，再一次性赋值到 self.* 字段。
+        emit 信号时直接携带完整快照（flows/stats/anomalies），订阅者优先使用
+        信号载荷，避免主线程通过共享 self.* 读取产生的内存可见性疑虑。
+        """
+        flows = self._flow_aggregator.get_flows()
 
         # 使用增量统计而非环形缓冲区（修复 >5000 包时数据不一致）
-        self._stats = self._stats_computer.compute_from_counters(
-            flows=self._flows,
+        stats = self._stats_computer.compute_from_counters(
+            flows=flows,
             protocol_dist=self._running_proto_dist,
             src_counter=self._running_src_counter,
             dst_counter=self._running_dst_counter,
@@ -312,16 +357,49 @@ class CaptureEngine:
             total_bytes=self._running_total_bytes,
             first_ts=self._running_first_ts,
             last_ts=self._running_last_ts,
+            fault_counter=self._fault_counter,
         )
-        self._anomalies = self._anomaly_marker.mark(self._flows)
+        anomalies = self._anomaly_marker.mark(flows)
+
+        # 风暴检测（基于增量计数器）
+        duration = stats.get("duration", 0.0)
+        storm_alerts = self._storm_detector.detect_from_counter(self._storm_counter, duration)
+        anomalies.extend(storm_alerts)
+
+        # 故障检测（基于故障计数器 + 流数据）
+        self._fault_counter.finalize_fragments()
+        fault_alerts = self._fault_detector.detect(
+            fault_counter=self._fault_counter,
+            storm_counter=self._storm_counter,
+            flows=flows,
+            packets=self._model.all_packets(),
+            duration=duration,
+        )
+        anomalies.extend(fault_alerts)
+
+        # 合并故障统计摘要
+        stats["fault_summary"] = {
+            "total_fault_alerts": len(fault_alerts),
+            "alert_types": [a["type"] for a in fault_alerts],
+        }
+
+        # 局部计算完成后整体赋值，缩短工作线程持有"半成品状态"的窗口
+        self._flows = flows
+        self._stats = stats
+        self._anomalies = anomalies
 
         logger.info(
-            f"预处理完成: {len(self._flows)} 条流, "
-            f"{self._stats.get('total_packets', 0)} 包, "
-            f"{len(self._anomalies)} 个异常"
+            f"预处理完成: {len(flows)} 条流, "
+            f"{stats.get('total_packets', 0)} 包, "
+            f"{len(anomalies)} 个异常 ({len(storm_alerts)} 个风暴告警)"
         )
 
-        self._signals.preprocessing_done.emit(self._stats)
+        # 信号载荷携带完整快照，订阅者无需再读 self._engine.* 共享状态
+        self._signals.preprocessing_done.emit({
+            "flows": flows,
+            "stats": stats,
+            "anomalies": anomalies,
+        })
 
     def _on_sniff_error(self, error_msg: str) -> None:
         """抓包线程错误回调 — 通过信号转发到主线程执行 stop_capture"""

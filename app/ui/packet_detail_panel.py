@@ -7,6 +7,7 @@ import logging
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QFont, QTextCharFormat, QColor
 from PySide6.QtWidgets import (
+    QLabel,
     QHeaderView,
     QSplitter,
     QTextEdit,
@@ -16,6 +17,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from app.application import SCROLLBAR_STYLE
 from app.models.packet_record import PacketRecord
 
 try:
@@ -37,10 +39,16 @@ class PacketDetailPanel(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(0)
+        layout.setContentsMargins(10, 10, 10, 10)
+        layout.setSpacing(8)
+
+        header = QLabel("协议详情与原始数据")
+        header.setStyleSheet("font-size: 14px; font-weight: bold; color: #cdd6f4;")
+        layout.addWidget(header)
 
         splitter = QSplitter(Qt.Vertical)
+        splitter.setChildrenCollapsible(False)
+        splitter.setHandleWidth(6)
 
         # 协议树
         self._tree = QTreeWidget()
@@ -48,6 +56,8 @@ class PacketDetailPanel(QWidget):
         self._tree.header().setStretchLastSection(True)
         self._tree.header().setSectionResizeMode(0, QHeaderView.ResizeToContents)
         self._tree.setAlternatingRowColors(True)
+        self._tree.setRootIsDecorated(True)
+        self._tree.setUniformRowHeights(True)
         splitter.addWidget(self._tree)
 
         # Hex 视图（使用只读 QTextEdit，自带滚动条，不会无限撑高）
@@ -55,13 +65,15 @@ class PacketDetailPanel(QWidget):
         self._hex_view.setReadOnly(True)
         self._hex_view.setFont(QFont("Consolas", 10))
         self._hex_view.setStyleSheet(
-            "QTextEdit { padding: 8px; background-color: #11111b; color: #cdd6f4; border: none; }"
+            "QTextEdit { padding: 10px; background-color: #11111b; color: #cdd6f4; border: 1px solid #313244; border-radius: 6px; }"
+            + SCROLLBAR_STYLE
         )
         self._hex_view.setPlainText("选择一个数据包查看详情")
         splitter.addWidget(self._hex_view)
 
         splitter.setStretchFactor(0, 2)
         splitter.setStretchFactor(1, 1)
+        splitter.setSizes([320, 180])
 
         layout.addWidget(splitter)
 

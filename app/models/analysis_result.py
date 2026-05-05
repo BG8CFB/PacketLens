@@ -58,7 +58,7 @@ class FlowAnalysis:
     evidence: list[str] = field(default_factory=list)
     raw_text: str = ""
 
-    VALID_VERDICTS = frozenset({"malicious", "suspicious", "benign", "inconclusive"})
+    VALID_VERDICTS = frozenset({"malicious", "suspicious", "benign", "inconclusive", "degraded"})
 
     def to_dict(self) -> dict:
         """序列化为字典"""
@@ -102,6 +102,7 @@ class AnalysisResult:
     duration_seconds: float = 0.0
     risk_level: str = ""  # Critical | High | Medium | Low | Normal
     flow_analyses: list[FlowAnalysis] = field(default_factory=list)
+    fault_insights: dict = field(default_factory=dict)
 
     @property
     def critical_count(self) -> int:
@@ -138,6 +139,7 @@ class AnalysisResult:
             "duration_seconds": self.duration_seconds,
             "risk_level": self.risk_level,
             "flow_analyses": [fa.to_dict() for fa in self.flow_analyses],
+            "fault_insights": self.fault_insights,
         }
 
     @classmethod
@@ -167,4 +169,5 @@ class AnalysisResult:
             duration_seconds=data.get("duration_seconds", 0.0),
             risk_level=data.get("risk_level", ""),
             flow_analyses=flow_analyses,
+            fault_insights=data.get("fault_insights", {}),
         )

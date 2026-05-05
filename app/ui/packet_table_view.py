@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import Signal
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import QHeaderView, QTableView
 
 
@@ -27,6 +27,9 @@ class PacketTableView(QTableView):
         self.setAlternatingRowColors(True)
         self.setShowGrid(False)
         self.setSortingEnabled(True)
+        self.setWordWrap(False)
+        # 行内容较长时右侧省略，避免撑高行高影响扫描效率
+        self.setTextElideMode(Qt.ElideRight)
         self.verticalHeader().setDefaultSectionSize(24)
         self.verticalHeader().hide()
 
@@ -34,6 +37,8 @@ class PacketTableView(QTableView):
         header = self.horizontalHeader()
         header.setMinimumSectionSize(50)
         header.setStretchLastSection(True)
+        self.setHorizontalScrollMode(QTableView.ScrollPerPixel)
+        self.setVerticalScrollMode(QTableView.ScrollPerPixel)
 
         # 连接信号
         self.doubleClicked.connect(self._on_double_click)
