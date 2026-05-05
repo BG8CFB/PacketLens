@@ -115,7 +115,8 @@ class TestInferTcpAppLayer:
         tcp = self._make_tcp(12345, 443, payload)
         result = _infer_tcp_app_layer(tcp, dst_port=443, src_port=12345)
         assert "[TLS]" in result
-        assert "Handshake" in result
+        # payload[5] = 0x01 → Client Hello
+        assert "Client Hello" in result
 
     def test_tls_via_src_port(self):
         """服务器响应 src_port=443 也应识别为 TLS"""
@@ -129,7 +130,7 @@ class TestInferTcpAppLayer:
         tcp = self._make_tcp(12345, 443, payload)
         result = _infer_tcp_app_layer(tcp, dst_port=443, src_port=12345)
         assert "[TLS]" in result
-        assert "ApplicationData" in result
+        assert "Application Data" in result
 
     def test_tls_alert(self):
         payload = bytes([0x15, 0x03, 0x03, 0x00, 0x02, 0x01, 0x00])
@@ -143,7 +144,7 @@ class TestInferTcpAppLayer:
         tcp = self._make_tcp(12345, 443, payload)
         result = _infer_tcp_app_layer(tcp, dst_port=443, src_port=12345)
         assert "[TLS]" in result
-        assert "ChangeCipherSpec" in result
+        assert "Change Cipher Spec" in result
 
     def test_tls_hint_when_no_record_header(self):
         """端口匹配 TLS 但 payload 不像 TLS 时返回 hint"""
@@ -303,7 +304,8 @@ class TestInferUdpAppLayer:
         udp = self._make_udp(54321, 53, payload)
         result = _infer_udp_app_layer(udp, dst_port=53, src_port=54321)
         assert "[DNS]" in result
-        assert "Query" in result
+        # Wireshark 风格: [DNS] Standard query 0x1234 A example.com
+        assert "Standard query" in result
         assert "example.com" in result
 
     def test_dns_response(self):
@@ -312,7 +314,8 @@ class TestInferUdpAppLayer:
         udp = self._make_udp(53, 54321, payload)
         result = _infer_udp_app_layer(udp, dst_port=54321, src_port=53)
         assert "[DNS]" in result
-        assert "Response" in result
+        # Wireshark 风格: [DNS] Standard query response 0x1234 A example.com
+        assert "Standard query response" in result
 
     def test_dns_response_via_src_port(self):
         """服务器响应 src_port=53, dst_port=随机端口，也应识别"""
@@ -320,7 +323,7 @@ class TestInferUdpAppLayer:
         udp = self._make_udp(53, 54321, payload)
         result = _infer_udp_app_layer(udp, dst_port=54321, src_port=53)
         assert "[DNS]" in result
-        assert "Response" in result
+        assert "Standard query response" in result
 
     def test_dns_short_payload(self):
         """DNS payload 不足 12 字节时返回 [DNS]"""

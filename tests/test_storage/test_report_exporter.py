@@ -253,3 +253,85 @@ class TestReportExporterXSS:
 
         md = exporter.export_markdown({}, result)
         assert "未评估" in md
+
+
+class TestReportExporterMarkdownNestedList:
+    """Markdown 嵌套列表父项 bullet — 修复8回归测试"""
+
+    def _build_result_with_flow_issues(self) -> AnalysisResult:
+        from app.models.analysis_result import FlowAnalysis
+        return AnalysisResult(
+            summary="带逐流分析的结果",
+            flow_analyses=[
+                FlowAnalysis(
+                    flow_id="flow-A",
+                    verdict="suspicious",
+                    confidence=0.82,
+                    evidence=["证据1", "证据2"],
+                    issues=[
+                        AnalysisIssue(
+                            severity="Critical",
+                            category="Security",
+                            title="可疑外联",
+                            description="目标 IP 不在白名单",
+                        ),
+                        AnalysisIssue(
+                            severity="Warning",
+                            category="Performance",
+                            title="高频请求",
+                            description="请求频率超阈值",
+                        ),
+                    ],
+                ),
+            ],
+        )
+
+    def test_markdown_renders_parent_bullet_for_flow_issues(self):
+        """flow_analyses 中包含 issues 时应输出『- **问题**:』父项 bullet"""
+        exporter = ReportExporter()
+        result = self._build_result_with_flow_issues()
+        md = exporter.export_markdown({}, result)
+
+        assert "- **问题**:" in md, "缺少『问题』父级 bullet，嵌套结构语义模糊"
+        assert "  - [Critical] 可疑外联" in md
+        assert "  - [Warning] 高频请求" in md
+
+    def test_markdown_parent_bullet_precedes_indented_children(self):
+        """父项 bullet 应紧邻在缩进子项之前"""
+        exporter = ReportExporter()
+        result = self._build_result_with_flow_issues()
+        md = exporter.export_markdown({}, result)
+
+        lines = md.splitlines()
+        parent_idx = next(i for i, ln in enumerate(lines) if ln == "- **问题**:")
+        # 父项后第一行必须是缩进的子 bullet
+        assert lines[parent_idx + 1].startswith("  - [")
+
+    def test_markdown_no_parent_bullet_when_no_flow_issues(self):
+        """flow_analyses 中无 issues 时不应输出『问题』父项 bullet"""
+        exporter = ReportExporter()
+        from app.models.analysis_result import FlowAnalysis
+        result = AnalysisResult(
+            summary="无逐流问题",
+            flow_analyses=[
+                FlowAnalysis(
+                    flow_id="flow-empty",
+                    verdict="benign",
+                    confidence=0.95,
+                    evidence=["无异常"],
+                    issues=[],  # 显式空列表
+                ),
+            ],
+        )
+        md = exporter.export_markdown({}, result)
+        assert "- **问题**:" not in md
+        assert "### 流 flow-empty" in md
+
+    def test_markdown_evidence_and_parent_bullet_coexist(self):
+        """evidence 与 issues 共存时，证据 bullet 与问题父项 bullet 都应出现"""
+        exporter = ReportExporter()
+        result = self._build_result_with_flow_issues()
+        md = exporter.export_markdown({}, result)
+
+        assert "- **证据**: 证据1; 证据2" in md
+        assert "- **问题**:" in md

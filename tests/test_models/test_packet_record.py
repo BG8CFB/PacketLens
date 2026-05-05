@@ -54,8 +54,10 @@ class TestPacketRecordFromScapy:
         assert record.dst_port == 80
         assert record.flags == "S"
         assert record.ttl == 64  # Scapy 默认 TTL
-        assert "seq=1000" in record.info
-        assert "win=8192" in record.info
+        # Wireshark 风格: [SYN] Seq=1000 Win=8192
+        assert "[SYN]" in record.info
+        assert "Seq=1000" in record.info
+        assert "Win=8192" in record.info
 
     def test_tcp_syn_ack(self):
         pkt = scapy.IP(src="10.0.0.2", dst="10.0.0.1") / scapy.TCP(
@@ -86,8 +88,8 @@ class TestPacketRecordFromScapy:
         record = PacketRecord.from_scapy_packet(3, pkt)
 
         assert record.protocol == "ICMP"
-        assert "type=8" in record.info
-        assert "code=0" in record.info
+        # Wireshark 风格: Echo (ping) request id=0xNNNN seq=N
+        assert "Echo (ping) request" in record.info
 
     def test_arp(self):
         pkt = scapy.ARP(op=1, psrc="10.0.0.1", pdst="10.0.0.2",
@@ -97,7 +99,10 @@ class TestPacketRecordFromScapy:
         assert record.protocol == "ARP"
         assert record.src_ip == "10.0.0.1"
         assert record.dst_ip == "10.0.0.2"
-        assert "op=1" in record.info
+        # Wireshark 风格: Who has 10.0.0.2? Tell 10.0.0.1
+        assert "Who has" in record.info
+        assert "10.0.0.2" in record.info
+        assert "Tell" in record.info
 
     def test_index_is_set(self):
         pkt = scapy.IP(src="1.1.1.1", dst="2.2.2.2") / scapy.TCP(sport=1, dport=2)

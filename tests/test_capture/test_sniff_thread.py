@@ -363,11 +363,12 @@ class TestSniffThreadQueueFull:
 
     def test_dropped_count_increases_when_pcap_queue_full(self):
         """pcap_queue 满时 dropped_count 应增加"""
-        # 创建容量极小的队列，模拟满队列
+        # 创建容量极小的队列，制造满队列场景
         cap_q = queue.Queue(maxsize=1)
         pcap_q = queue.Queue(maxsize=1)
-        # 预先填满队列
-        pcap_q.put("dummy")
+        # 预先填满队列，放入真实的 scapy 包
+        from scapy.all import IP as ScapyIP, ICMP as ScapyICMP
+        pcap_q.put(ScapyIP(src="127.0.0.1", dst="127.0.0.1") / ScapyICMP())
 
         thread = SniffThread(
             iface="\\Device\\NPF_Loopback",
@@ -439,3 +440,70 @@ class TestSniffThreadQueueFull:
 
         # 总捕获数 = 入队数 + 丢弃数（>= 实际网络捕获数）
         assert thread.packet_count >= captured
+
+
+class TestSniffThreadStopReturnValue:
+    """stop() 返回值契约 — 修复3：超时未停止应返回 False"""
+
+    def test_stop_returns_true_when_thread_never_started(self):
+        """未启动的线程，is_alive 为 False，stop 应返回 True"""
+        cap_q = queue.Queue()
+        pcap_q = queue.Queue()
+        thread = SniffThread(
+            iface="\\Device\\NPF_Loopback",
+            capture_queue=cap_q,
+            pcap_queue=pcap_q,
+        )
+        # 不调用 start()，线程未启动，is_alive 为 False
+        result = thread.stop(timeout=0.1)
+        assert result is True
+
+    def test_stop_returns_false_when_thread_still_alive(self, monkeypatch):
+        """线程未在超时内退出（join 后仍 alive），应返回 False"""
+        cap_q = queue.Queue()
+        pcap_q = queue.Queue()
+        thread = SniffThread(
+            iface="\\Device\\NPF_Loopback",
+            capture_queue=cap_q,
+            pcap_queue=pcap_q,
+        )
+
+        # 让 join 立即返回但 is_alive 仍报 True，制造无法停止的线程场景
+        monkeypatch.setattr(thread, "join", lambda timeout=None: None)
+        monkeypatch.setattr(thread, "is_alive", lambda: True)
+
+        result = thread.stop(timeout=0.1)
+        assert result is False
+
+    def test_stop_returns_true_when_thread_stops_in_time(self, monkeypatch):
+        """线程在超时内干净退出，应返回 True"""
+        cap_q = queue.Queue()
+        pcap_q = queue.Queue()
+        thread = SniffThread(
+            iface="\\Device\\NPF_Loopback",
+            capture_queue=cap_q,
+            pcap_queue=pcap_q,
+        )
+
+        monkeypatch.setattr(thread, "join", lambda timeout=None: None)
+        monkeypatch.setattr(thread, "is_alive", lambda: False)
+
+        result = thread.stop(timeout=0.1)
+        assert result is True
+
+    def test_stop_sets_stop_event(self, monkeypatch):
+        """stop() 必须设置 _stop_event，让 sniff stop_filter 生效"""
+        cap_q = queue.Queue()
+        pcap_q = queue.Queue()
+        thread = SniffThread(
+            iface="\\Device\\NPF_Loopback",
+            capture_queue=cap_q,
+            pcap_queue=pcap_q,
+        )
+
+        monkeypatch.setattr(thread, "join", lambda timeout=None: None)
+        monkeypatch.setattr(thread, "is_alive", lambda: False)
+
+        assert not thread._stop_event.is_set()
+        thread.stop(timeout=0.1)
+        assert thread._stop_event.is_set()

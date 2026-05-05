@@ -122,6 +122,70 @@ class PromptBuilder:
                 f"({f.get('protocol', '?')}) {f.get('bytes', 0)}B {f.get('packets', 0)}包"
             )
 
+        # TCP 健康指标格式化
+        tcp_health_data = stats.get("tcp_health", {})
+        if tcp_health_data and tcp_health_data.get("total_tcp_packets", 0) > 0:
+            tcp_health_lines = [
+                f"  TCP 总包: {tcp_health_data.get('total_tcp_packets', 0)}",
+                f"  重传率: {tcp_health_data.get('retransmit_rate', 0):.2%}",
+                f"  零窗口: {tcp_health_data.get('zero_window_count', 0)}",
+                f"  RST: {tcp_health_data.get('rst_count', 0)}",
+            ]
+            tcp_health_str = "\n".join(tcp_health_lines)
+        else:
+            tcp_health_str = "  无 TCP 数据"
+
+        # DNS 健康指标格式化
+        dns_health_data = stats.get("dns_health", {})
+        if dns_health_data and dns_health_data.get("response_count", 0) > 0:
+            dns_health_str = (
+                f"  DNS 响应: {dns_health_data.get('response_count', 0)}, "
+                f"失败: {dns_health_data.get('failure_count', 0)}, "
+                f"失败率: {dns_health_data.get('failure_rate', 0):.2%}"
+            )
+        else:
+            dns_health_str = "  无 DNS 响应数据"
+
+        # ICMP 错误格式化
+        icmp_data = stats.get("icmp_error_summary", {})
+        if icmp_data and icmp_data.get("total_errors", 0) > 0:
+            by_type = icmp_data.get("by_type", {})
+            type_str = ", ".join(f"Type{t}={c}" for t, c in by_type.items())
+            icmp_errors_str = f"  ICMP 错误: {icmp_data.get('total_errors', 0)} ({type_str})"
+        else:
+            icmp_errors_str = "  无 ICMP 错误"
+
+        # TTL 分布格式化
+        ttl_data = stats.get("ttl_distribution", {})
+        anomalous = ttl_data.get("anomalous_sources", [])
+        if anomalous:
+            ttl_lines = [f"  {a['ip']}: TTL跨度={a['ttl_range']} ({a['samples']}样本)" for a in anomalous[:5]]
+            ttl_distribution_str = "\n".join(ttl_lines)
+        else:
+            ttl_distribution_str = "  无 TTL 异常"
+
+        # 分片统计格式化
+        frag_data = stats.get("fragment_stats", {})
+        if frag_data and frag_data.get("frag_packets", 0) > 0:
+            fragment_stats_str = (
+                f"  分片包: {frag_data.get('frag_packets', 0)}, "
+                f"重叠: {frag_data.get('overlaps', 0)}, "
+                f"不完整: {frag_data.get('incomplete', 0)}"
+            )
+        else:
+            fragment_stats_str = "  无分片数据"
+
+        # PPS 时间线格式化
+        pps_data = stats.get("pps_timeline", {})
+        if pps_data and pps_data.get("max_pps", 0) > 0:
+            pps_timeline_str = (
+                f"  峰值 PPS: {pps_data.get('max_pps', 0)}, "
+                f"中位数: {pps_data.get('median_pps', 0):.0f}, "
+                f"突刺比: {pps_data.get('spike_ratio', 0):.1f}x"
+            )
+        else:
+            pps_timeline_str = "  无 PPS 数据"
+
         # 每条流 + 采样包
         flow_sections = []
         for flow in flows:
@@ -142,6 +206,12 @@ class PromptBuilder:
             top_dst="\n".join(dst_lines) or "无数据",
             top_flows="\n".join(top_flow_lines) or "无数据",
             anomaly_summary="\n".join(anomaly_lines),
+            tcp_health=tcp_health_str,
+            dns_health=dns_health_str,
+            icmp_errors=icmp_errors_str,
+            ttl_distribution=ttl_distribution_str,
+            fragment_stats=fragment_stats_str,
+            pps_timeline=pps_timeline_str,
             all_flows_with_packets="\n".join(flow_sections),
         )
 

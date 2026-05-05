@@ -25,8 +25,9 @@ from app.models.packet_record import PacketRecord
 
 logger = logging.getLogger(__name__)
 
-# Layer 2 最多钻取的可疑流数（默认值，优先使用 AI_DEFAULTS）
-MAX_LAYER2_FLOWS = AI_DEFAULTS["max_layer2_flows"]
+
+class _Layer2Cancelled(Exception):
+    """内部信号：Layer 2 单条流分析被请求取消，用于中断流式调用"""
 
 
 class AnalysisWorker(QThread):
@@ -57,6 +58,7 @@ class AnalysisWorker(QThread):
         temperature: float | None = None,
         max_tokens: int | None = None,
         max_concurrency: int | None = None,
+        max_layer2_flows: int | None = None,
         parent=None,
     ):
         super().__init__(parent)
@@ -71,6 +73,10 @@ class AnalysisWorker(QThread):
         self._temperature = temperature if temperature is not None else AI_DEFAULTS["temperature"]
         self._max_tokens = max_tokens if max_tokens is not None else AI_DEFAULTS["max_tokens"]
         self._max_concurrency = max_concurrency if max_concurrency is not None else AI_DEFAULTS["max_concurrency"]
+        self._max_layer2_flows = (
+            max_layer2_flows if max_layer2_flows is not None
+            else AI_DEFAULTS["max_layer2_flows"]
+        )
 
     def run(self) -> None:
         """执行分析"""
@@ -205,7 +211,7 @@ class AnalysisWorker(QThread):
         flow_analyses: list[FlowAnalysis] = []
 
         if suspicious_flows and self._packets:
-            layer2_count = min(len(suspicious_flows), MAX_LAYER2_FLOWS)
+            layer2_count = min(len(suspicious_flows), self._max_layer2_flows)
             self.analysis_stage.emit(
                 f"Layer 2/3: 深度分析可疑流 ({layer2_count} 条)..."
             )
@@ -292,8 +298,16 @@ class AnalysisWorker(QThread):
         results: dict[int, str] = {}
         context = self._build_layer2_context(layer1_result, layer1_text)
 
-        def analyze_single_flow(idx: int, flow: FlowRecord) -> tuple[int, str]:
-            """单条流的分析任务（在工作线程中执行）"""
+        def analyze_single_flow(idx: int, flow: FlowRecord) -> tuple[int, str | None]:
+            """单条流的分析任务（在工作线程中执行）
+
+            返回 (idx, text|None)。text 为 None 表示该任务被请求取消，
+            上层应在结果聚合时跳过 None 条目。
+            """
+            # 提交后取消：进入函数前先短路一次
+            if self.isInterruptionRequested():
+                return idx, None
+
             try:
                 worker_engine = self._engine.clone_for_worker(max_tokens=self._max_tokens)
 
@@ -303,14 +317,24 @@ class AnalysisWorker(QThread):
                     context=context,
                 )
 
+                # cancel-aware on_chunk：检测到中断时抛出内部信号，
+                # 让 LangChain stream 立即停止读取下一块（提前返回已收到的内容）。
+                def _cancel_aware_chunk(_chunk: str) -> None:
+                    if self.isInterruptionRequested():
+                        raise _Layer2Cancelled()
+
                 response = worker_engine.analyze_stream(
                     prompt=user_prompt,
                     system_prompt=system_prompt,
-                    on_chunk=None,  # 并行时不逐块 emit，避免信号跨线程
+                    on_chunk=_cancel_aware_chunk,
                     temperature=self._temperature,
                     max_tokens=self._max_tokens,
                 )
                 return idx, response
+
+            except _Layer2Cancelled:
+                logger.info(f"Layer 2 流 {flow.flow_id} 在请求中被取消")
+                return idx, None
 
             except Exception as e:
                 logger.warning(f"Layer 2 分析流 {flow.flow_id} 失败: {e}")
@@ -339,6 +363,9 @@ class AnalysisWorker(QThread):
                     break
                 try:
                     idx, text = future.result()
+                    if text is None:
+                        # 该流被取消，不计入完成数
+                        continue
                     results[idx] = text
                     completed += 1
                     flow = flows[idx]

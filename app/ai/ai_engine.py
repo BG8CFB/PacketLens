@@ -88,7 +88,19 @@ class AIEngine:
         response = llm.invoke(messages)
         elapsed = time.time() - start
 
-        result = response.content or ""
+        # Anthropic 协议的 response.content 可能是 list，空 list 需要特殊处理
+        if isinstance(response.content, list):
+            if not response.content:
+                logger.warning(
+                    "AI 返回空 content，可能原因：\n"
+                    "  1. 后端服务实际返回 OpenAI 格式，但配置了 Anthropic provider_type\n"
+                    "  2. 后端服务未正确实现 Anthropic Messages API 响应格式\n"
+                    "  3. 模型生成内容被过滤\n"
+                    "建议检查 .env 中的 AI_PROVIDER_TYPE 是否与后端协议匹配"
+                )
+            result = response.text or ""
+        else:
+            result = response.content or ""
         self._extract_usage(response)
         logger.info(
             f"AI 响应: {len(result)} 字符, {elapsed:.1f}s, "

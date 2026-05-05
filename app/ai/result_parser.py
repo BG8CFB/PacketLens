@@ -11,7 +11,7 @@ from app.models.analysis_result import AnalysisIssue, AnalysisResult, FlowAnalys
 
 VALID_SEVERITIES = frozenset({"Critical", "Warning", "Info", "Normal"})
 VALID_CATEGORIES = frozenset({
-    "Security", "Performance", "Anomaly", "Protocol", "Configuration", "General", "System",
+    "Security", "Performance", "Anomaly", "Protocol", "Configuration", "General", "System", "Fault",
 })
 
 _SEVERITY_ALIASES = {
@@ -26,6 +26,10 @@ _CATEGORY_ALIASES = {
     "Traffic": "Anomaly",
     "Malware": "Security",
     "Vuln": "Security",
+    "Failure": "Fault",
+    "Degradation": "Fault",
+    "Health": "Fault",
+    "Connectivity": "Fault",
 }
 
 
@@ -123,6 +127,7 @@ class ResultParser:
             overall_assessment=parsed.get("overall_assessment", ""),
             raw_ai_response=raw,
             risk_level=parsed.get("risk_level", ""),
+            fault_insights=parsed.get("fault_insights", {}),
         )
 
     def parse_layer2(self, response_text: str) -> FlowAnalysis:

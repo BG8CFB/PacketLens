@@ -41,6 +41,12 @@ LAYER2_TEMPLATE = """# 单流逐包级深度分析
 - 确认异常 / 误报 / 需更多信息
 - 如果是误报，说明原因
 
+### 5. 故障分析
+- TCP 流：重传模式、窗口缩放、RTT 异常
+- DNS 流：响应码异常（NXDOMAIN/SERVFAIL）、解析延迟
+- ICMP 流：错误类型与可能原因（链路/路由/MTU）
+- 其他：分片问题、TTL 异常
+
 ## 输出要求
 
 1. 给出明确的正常性评估结论
@@ -50,12 +56,12 @@ LAYER2_TEMPLATE = """# 单流逐包级深度分析
 
 {{
   "flow_id": "当前流的 ID",
-  "verdict": "malicious|suspicious|benign|inconclusive",
+  "verdict": "malicious|suspicious|benign|inconclusive|degraded",
   "confidence": 0.0-1.0,
   "issues": [
     {{
       "severity": "Critical|Warning|Info",
-      "category": "Security|Performance|Anomaly|Protocol",
+      "category": "Security|Performance|Anomaly|Protocol|Configuration|Fault",
       "title": "问题标题",
       "description": "详细分析：现象 → 证据（引用包序号） → 影响",
       "affected_flows": ["当前流的 flow_id"],
@@ -66,10 +72,10 @@ LAYER2_TEMPLATE = """# 单流逐包级深度分析
 }}"""
 
 
-LAYER3_TEMPLATE = """# 综合安全报告生成
+LAYER3_TEMPLATE = """# 综合分析报告生成
 
 ## 任务目标
-基于 Layer 1 全量分析和 Layer 2 可疑流逐包诊断结果，生成最终综合安全报告。
+基于 Layer 1 全量分析和 Layer 2 可疑流逐包诊断结果，生成最终综合分析报告（安全 + 故障双维度）。
 
 ## Layer 1 全量分析结果
 {layer1_result}
@@ -102,7 +108,7 @@ LAYER3_TEMPLATE = """# 综合安全报告生成
   "issues": [
     {{
       "severity": "Critical|Warning|Info",
-      "category": "Security|Performance|Anomaly|Protocol|Configuration",
+      "category": "Security|Performance|Anomaly|Protocol|Configuration|Fault",
       "title": "问题标题",
       "description": "综合分析描述",
       "affected_flows": ["flow_id_1"],
@@ -110,6 +116,13 @@ LAYER3_TEMPLATE = """# 综合安全报告生成
       "recommendation": "具体处置步骤"
     }}
   ],
+  "fault_insights": {{
+    "tcp_health": "TCP 健康度评估（重传率/零窗口/RTT）",
+    "icmp_health": "ICMP 错误模式分析",
+    "dns_health": "DNS 解析状态评估",
+    "routing_health": "路由/TTL 异常分析",
+    "overall_fault_status": "网络健康度总结"
+  }},
   "protocol_insights": {{
     "tcp_analysis": "TCP 分析总结",
     "udp_analysis": "UDP 分析总结",

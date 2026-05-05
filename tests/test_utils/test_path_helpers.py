@@ -160,7 +160,7 @@ class TestAtomicWrite:
     def test_no_file_left_on_failure(self, tmp_path):
         """写入失败时不应留下目标文件"""
         target = tmp_path / "fail_test" / "nested" / "file.txt"
-        # 使用不可写的路径模拟失败（路径中含无效字符）
+        # 使用不可写的路径制造失败场景（路径中含无效字符）
         # 实际测试：写入到只读目录（如果可能）
         # 这里用一个简单的方式：目标路径为已存在的目录
         conflict_dir = tmp_path / "conflict"

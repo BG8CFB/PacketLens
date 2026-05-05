@@ -16,6 +16,9 @@ def create_ai_engine(ai_config: dict) -> AIEngine:
 
     Args:
         ai_config: 来自 ConfigManager.get_ai_config() 的配置 dict
+
+    所有可用字段均按字段名透传（含 temperature），避免运行时
+    实际参数与设置页/配置链不一致。
     """
     return AIEngine(
         provider_type=ai_config["provider_type"],
@@ -26,6 +29,7 @@ def create_ai_engine(ai_config: dict) -> AIEngine:
         context_window_tokens=ai_config["context_window_tokens"],
         max_tokens=ai_config["max_tokens"],
         max_input_chars=ai_config.get("max_input_chars"),
+        temperature=ai_config.get("temperature"),
     )
 
 
