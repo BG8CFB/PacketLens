@@ -33,9 +33,9 @@ class LLMFactory:
         api_key: str,
         base_url: str = "",
         model: str = "",
-        temperature: float = 0.3,
-        max_tokens: int = 4096,
-        timeout: int = 120,
+        temperature: float | None = None,
+        max_tokens: int | None = None,
+        timeout: int | None = None,
         stream_usage: bool = True,
     ) -> BaseChatModel:
         creator = _PROVIDER_REGISTRY.get(provider_type)
@@ -45,10 +45,14 @@ class LLMFactory:
                 f"不支持的 provider_type: '{provider_type}'，"
                 f"已注册类型: [{valid}]"
             )
+        # 默认参数统一从 AI_DEFAULTS 读取
+        from app.config.ai_defaults import AI_DEFAULTS
         return creator(
             api_key=api_key, base_url=base_url, model=model,
-            temperature=temperature, max_tokens=max_tokens,
-            timeout=timeout, stream_usage=stream_usage,
+            temperature=temperature if temperature is not None else AI_DEFAULTS["temperature"],
+            max_tokens=max_tokens if max_tokens is not None else AI_DEFAULTS["max_tokens"],
+            timeout=timeout if timeout is not None else AI_DEFAULTS["timeout"],
+            stream_usage=stream_usage,
         )
 
     @staticmethod
@@ -82,7 +86,7 @@ def _create_openai(
 
     kw = dict(
         api_key=api_key, model=model, temperature=temperature,
-        max_tokens=max_tokens, timeout=timeout, stream_usage=stream_usage,
+        max_tokens=max_tokens, request_timeout=timeout, stream_usage=stream_usage,
     )
     if base_url:
         kw["base_url"] = base_url
@@ -98,7 +102,8 @@ def _create_anthropic(
 
     kw = dict(
         api_key=api_key, model=model, temperature=temperature,
-        max_tokens=max_tokens, timeout=timeout, streaming=stream_usage,
+        max_tokens=max_tokens, default_request_timeout=timeout,
+        streaming=True, stream_usage=stream_usage,
     )
     if base_url:
         kw["anthropic_api_url"] = base_url

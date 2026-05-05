@@ -319,6 +319,10 @@ class PacketRecord:
     def from_dict(cls, data: dict) -> PacketRecord:
         """从字典反序列化（raw_bytes 从 hex 字符串还原）"""
         raw_hex = data.get("raw_bytes", "")
+        try:
+            raw_bytes = bytes.fromhex(raw_hex) if raw_hex else b""
+        except ValueError:
+            raw_bytes = b""
         return cls(
             index=data.get("index", 0),
             timestamp=data.get("timestamp", 0.0),
@@ -329,7 +333,7 @@ class PacketRecord:
             protocol=data.get("protocol", "Other"),
             length=data.get("length", 0),
             info=data.get("info", ""),
-            raw_bytes=bytes.fromhex(raw_hex) if raw_hex else b"",
+            raw_bytes=raw_bytes,
             ttl=data.get("ttl"),
             flags=data.get("flags"),
             is_broadcast=data.get("is_broadcast", False),

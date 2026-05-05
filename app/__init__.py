@@ -1,4 +1,4 @@
 """抓包 + AI 分析工具"""
 
-__version__ = "1.0.0"
-__app_name__ = "PacketLens"
+from app.constants import APP_NAME as __app_name__
+from app.constants import APP_VERSION as __version__

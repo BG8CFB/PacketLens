@@ -28,6 +28,7 @@ def _reset_builtin_cache(monkeypatch):
         "AI_PROVIDER_TYPE", "AI_CONTEXT_WINDOW", "AI_MAX_TOKENS",
         "AI_TEMPERATURE", "AI_MAX_INPUT_CHARS", "AI_TIMEOUT",
         "AI_MAX_CONCURRENCY", "AI_MAX_LAYER2_FLOWS",
+        "AI_PACKETS_PER_FLOW_LAYER1",
     ):
         monkeypatch.delenv(var, raising=False)
     # 重置缓存（_dotenv_loaded 不重置，避免重新加载 .env 把变量塞回来）
@@ -855,3 +856,124 @@ class TestBuiltinProviderConcurrencyFields:
         assert provider is not None
         assert provider["max_concurrency"] == AI_DEFAULTS["max_concurrency"]
         assert provider["max_layer2_flows"] == AI_DEFAULTS["max_layer2_flows"]
+
+
+# ── 九、内置 provider .env 字段同步到 config.json（timeout 等修复） ──
+
+
+class TestBuiltinProviderEnvSync:
+    """修改 .env 后重载，内置 provider 的字段必须同步更新到 config.json"""
+
+    def test_env_timeout_synced_to_existing_provider(self, config_path: Path, monkeypatch):
+        """首次写入 config.json 后修改 .env 的 AI_TIMEOUT，重载时应同步更新"""
+        from app.config import provider_loader as pl
+
+        # 第一步：以初始 timeout=120 写入 config.json
+        monkeypatch.setenv("AI_NAME", "SyncAI")
+        monkeypatch.setenv("AI_API_KEY", "sync-key")
+        monkeypatch.setenv("AI_MODEL", "sync-model")
+        monkeypatch.setenv("AI_API_BASE", "https://old.api.com")
+        monkeypatch.setenv("AI_TIMEOUT", "120")
+        pl._builtin_provider_cache = pl._NOT_LOADED
+
+        m1 = ConfigManager(config_path=config_path)
+        m1.save()
+
+        # 验证初始值
+        providers1 = m1.get_providers()
+        sync_p1 = [p for p in providers1 if p["name"] == "SyncAI"][0]
+        assert sync_p1["timeout"] == 120
+
+        # 第二步：修改 .env 中的 timeout 和 api_base
+        monkeypatch.setenv("AI_TIMEOUT", "600")
+        monkeypatch.setenv("AI_API_BASE", "https://new.api.com")
+        pl._builtin_provider_cache = pl._NOT_LOADED
+
+        # 重载（模拟应用重启）
+        m2 = ConfigManager(config_path=config_path)
+
+        # timeout 和 api_base 应从 .env 同步到 config.json 中的已有 provider
+        providers2 = m2.get_providers()
+        sync_p2 = [p for p in providers2 if p["name"] == "SyncAI"][0]
+        assert sync_p2["timeout"] == 600, f"timeout 未同步，期望 600，实际 {sync_p2['timeout']}"
+        assert sync_p2["api_base"] == "https://new.api.com"
+
+        # get_ai_config 也应反映新值
+        ai_cfg = m2.get_ai_config()
+        assert ai_cfg["timeout"] == 600
+
+    def test_env_all_fields_synced_on_reload(self, config_path: Path, monkeypatch):
+        """重载时所有内置 provider 字段都应从 .env 同步"""
+        from app.config import provider_loader as pl
+
+        # 初始写入
+        monkeypatch.setenv("AI_NAME", "FullSync")
+        monkeypatch.setenv("AI_API_KEY", "old-key")
+        monkeypatch.setenv("AI_MODEL", "old-model")
+        monkeypatch.setenv("AI_API_BASE", "https://old.api.com")
+        monkeypatch.setenv("AI_TIMEOUT", "120")
+        monkeypatch.setenv("AI_TEMPERATURE", "0.5")
+        monkeypatch.setenv("AI_MAX_TOKENS", "4096")
+        pl._builtin_provider_cache = pl._NOT_LOADED
+
+        m1 = ConfigManager(config_path=config_path)
+        m1.save()
+
+        # 修改多个字段
+        monkeypatch.setenv("AI_API_KEY", "new-key")
+        monkeypatch.setenv("AI_MODEL", "new-model")
+        monkeypatch.setenv("AI_API_BASE", "https://new.api.com")
+        monkeypatch.setenv("AI_TIMEOUT", "300")
+        monkeypatch.setenv("AI_TEMPERATURE", "0.7")
+        monkeypatch.setenv("AI_MAX_TOKENS", "8192")
+        pl._builtin_provider_cache = pl._NOT_LOADED
+
+        m2 = ConfigManager(config_path=config_path)
+        providers = m2.get_providers()
+        p = [p for p in providers if p["name"] == "FullSync"][0]
+
+        assert p["api_key"] == "new-key"
+        assert p["model"] == "new-model"
+        assert p["api_base"] == "https://new.api.com"
+        assert p["timeout"] == 300
+        assert p["temperature"] == 0.7
+        assert p["max_tokens"] == 8192
+
+    def test_non_default_provider_not_overwritten_by_env(self, config_path: Path, monkeypatch):
+        """非内置 provider（is_default=False）不应被 .env 同步覆盖"""
+        from app.config import provider_loader as pl
+
+        monkeypatch.setenv("AI_NAME", "BuiltinAI")
+        monkeypatch.setenv("AI_API_KEY", "builtin-key")
+        monkeypatch.setenv("AI_MODEL", "builtin-model")
+        monkeypatch.setenv("AI_TIMEOUT", "600")
+        pl._builtin_provider_cache = pl._NOT_LOADED
+
+        m1 = ConfigManager(config_path=config_path)
+        # 手动添加一个非内置 provider
+        providers = m1.get_providers()
+        providers.append({
+            "name": "CustomProvider",
+            "provider_type": "openai",
+            "api_key": "custom-key",
+            "model": "custom-model",
+            "timeout": 30,
+            "is_default": False,
+        })
+        m1.set_providers(providers, "BuiltinAI")
+        m1.save()
+
+        # 修改 .env 的 timeout
+        monkeypatch.setenv("AI_TIMEOUT", "999")
+        pl._builtin_provider_cache = pl._NOT_LOADED
+
+        m2 = ConfigManager(config_path=config_path)
+        providers2 = m2.get_providers()
+
+        # 非内置 provider 的 timeout 不应被 .env 覆盖
+        custom = [p for p in providers2 if p["name"] == "CustomProvider"][0]
+        assert custom["timeout"] == 30
+
+        # 内置 provider 的 timeout 应被更新
+        builtin = [p for p in providers2 if p["name"] == "BuiltinAI"][0]
+        assert builtin["timeout"] == 999

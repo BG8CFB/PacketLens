@@ -32,7 +32,7 @@ class FlowRecord:
     def duration(self) -> float:
         if self.first_seen == 0.0:
             return 0.0
-        return self.last_seen - self.first_seen
+        return max(0.0, self.last_seen - self.first_seen)
 
     @property
     def bps(self) -> float:

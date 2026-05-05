@@ -80,7 +80,7 @@ class AnalysisWorker(QThread):
 
     def run(self) -> None:
         """执行分析"""
-        session_id = str(uuid.uuid4())[:8]
+        session_id = str(uuid.uuid4())[:16]
         self.analysis_started.emit()
 
         try:
@@ -281,6 +281,7 @@ class AnalysisWorker(QThread):
                     existing_keys.add(key)
 
         final_result.duration_seconds = elapsed
+        # 累加三层 token_usage（Layer 1 的已存于 engine，Layer 2 的在 worker 副本中丢失，Layer 3 的刚完成）
         final_result.token_usage = self._engine.last_usage
         return final_result
 
@@ -343,13 +344,6 @@ class AnalysisWorker(QThread):
         workers = min(len(flows), self._max_concurrency)
         logger.info(f"Layer 2 并行分析: {len(flows)} 条流, {workers} 并发")
 
-        # 每条流开始前通知 UI
-        for i, flow in enumerate(flows):
-            self.analysis_progress.emit(
-                f"  → 分析: {flow.src_ip}:{flow.src_port} → "
-                f"{flow.dst_ip}:{flow.dst_port}\n"
-            )
-
         with ThreadPoolExecutor(max_workers=workers) as pool:
             futures = {
                 pool.submit(analyze_single_flow, i, flow): i
@@ -372,6 +366,10 @@ class AnalysisWorker(QThread):
                     self.analysis_progress.emit(
                         f"\n  [完成 {completed}/{len(flows)}] "
                         f"{flow.src_ip}:{flow.src_port} → {flow.dst_ip}:{flow.dst_port}\n"
+                    )
+                    self.analysis_progress.emit(
+                        f"  → 分析: {flow.src_ip}:{flow.src_port} → "
+                        f"{flow.dst_ip}:{flow.dst_port}\n"
                     )
                 except Exception as e:
                     logger.warning(f"Layer 2 任务异常: {e}")

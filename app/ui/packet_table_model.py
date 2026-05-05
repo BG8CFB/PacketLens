@@ -87,10 +87,28 @@ class PacketTableModel(QAbstractTableModel):
         if not packets:
             return
 
-        start = len(self._packets)
-        self.beginInsertRows(QModelIndex(), start, start + len(packets) - 1)
-        self._packets.extend(packets)
-        self.endInsertRows()
+        if self._sort_column >= 0:
+            # 排序状态下，添加后重新排序
+            self.beginResetModel()
+            self._packets.extend(packets)
+            reverse = self._sort_order == Qt.DescendingOrder
+            key_funcs = {
+                0: lambda p: p.index,
+                1: lambda p: p.timestamp,
+                2: lambda p: p.src_ip,
+                3: lambda p: p.dst_ip,
+                4: lambda p: p.protocol,
+                5: lambda p: p.length,
+                6: lambda p: p.info,
+            }
+            key_func = key_funcs.get(self._sort_column, lambda p: p.index)
+            self._packets.sort(key=key_func, reverse=reverse)
+            self.endResetModel()
+        else:
+            start = len(self._packets)
+            self.beginInsertRows(QModelIndex(), start, start + len(packets) - 1)
+            self._packets.extend(packets)
+            self.endInsertRows()
 
     def clear(self) -> None:
         """清空所有数据"""

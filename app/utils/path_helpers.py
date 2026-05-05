@@ -11,7 +11,8 @@ from app.constants import APP_NAME
 def get_app_data_dir() -> Path:
     """获取应用数据目录 (%APPDATA%/PacketLens/)"""
     if sys.platform == "win32":
-        base = Path(os.environ.get("APPDATA", Path.home() / "AppData" / "Roaming"))
+        appdata = os.environ.get("APPDATA") or str(Path.home() / "AppData" / "Roaming")
+        base = Path(appdata)
     else:
         base = Path.home() / ".config"
     app_dir = base / APP_NAME
@@ -66,18 +67,21 @@ def atomic_write(path: Path, content: str, encoding: str = "utf-8") -> None:
         dir=str(path.parent),
         prefix=path.name + ".tmp_",
     )
+    fd_taken = False  # 跟踪 fd 是否已被 os.fdopen 接管
     try:
-        with os.fdopen(fd, "w", encoding=encoding) as f:
+        f = os.fdopen(fd, "w", encoding=encoding)
+        fd_taken = True
+        with f:
             f.write(content)
             f.flush()
             os.fsync(f.fileno())
         os.replace(tmp_path, str(path))
     except BaseException:
-        # 确保关闭 fd（os.fdopen 可能尚未执行时 fd 仍打开）
-        try:
-            os.close(fd)
-        except OSError:
-            pass
+        if not fd_taken:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
         try:
             os.unlink(tmp_path)
         except OSError:

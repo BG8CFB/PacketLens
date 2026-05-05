@@ -368,11 +368,15 @@ class CaptureEngine:
 
         # 故障检测（基于故障计数器 + 流数据）
         self._fault_counter.finalize_fragments()
+
+        # 预处理在工作线程执行，不可直接调用 QAbstractTableModel 方法。
+        # all_packets 的快照已在 stop_capture 的主线程最后 _on_poll 中通过
+        # _fault_counter.update() 的增量追踪获取，此处不需要再读 model。
         fault_alerts = self._fault_detector.detect(
             fault_counter=self._fault_counter,
             storm_counter=self._storm_counter,
             flows=flows,
-            packets=self._model.all_packets(),
+            packets=[],  # 不再从 QAbstractTableModel 读取，改用 FaultCounter 增量数据
             duration=duration,
         )
         anomalies.extend(fault_alerts)
@@ -411,5 +415,4 @@ class CaptureEngine:
         """清理资源，关闭线程池"""
         if self._capture_active.is_set():
             self.stop_capture()
-        # 等待预处理完成后再关闭线程池，避免丢失预处理结果
-        self._preprocess_executor.shutdown(wait=True)
+        self._preprocess_executor.shutdown(wait=False)

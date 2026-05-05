@@ -135,8 +135,8 @@ h1 {{ color: #333; }} .meta {{ color: #666; }}</style>
 <div class="meta">
     <p>分析时间: {result.timestamp.strftime('%Y-%m-%d %H:%M:%S')} |
     模式: {'快速' if result.analysis_mode == 'quick' else '深度'} |
-    总包数: {session_data.get('packet_count', 'N/A')} |
-    总流数: {session_data.get('flow_count', 'N/A')}</p>
+    总包数: {self._escape_html(str(session_data.get('packet_count', 'N/A')))} |
+    总流数: {self._escape_html(str(session_data.get('flow_count', 'N/A')))}</p>
 </div>
 <h2>概览</h2>
 <p>{summary_esc}</p>

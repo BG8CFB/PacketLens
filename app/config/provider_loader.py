@@ -120,6 +120,10 @@ def load_builtin_provider() -> dict | None:
             os.environ.get("AI_MAX_LAYER2_FLOWS") or AI_DEFAULTS["max_layer2_flows"],
             AI_DEFAULTS["max_layer2_flows"],
         ),
+        "packets_per_flow_layer1": _safe_int(
+            os.environ.get("AI_PACKETS_PER_FLOW_LAYER1") or AI_DEFAULTS["packets_per_flow_layer1"],
+            AI_DEFAULTS["packets_per_flow_layer1"],
+        ),
         "is_default": True,
     }
 

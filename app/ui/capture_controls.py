@@ -117,7 +117,7 @@ class CaptureControls(QWidget):
         layout.addWidget(self._elapsed_label)
 
         # 已用时间更新定时器
-        self._elapsed_timer = QTimer()
+        self._elapsed_timer = QTimer(self)
         self._elapsed_timer.setInterval(1000)
         self._elapsed_timer.timeout.connect(self._update_elapsed)
 

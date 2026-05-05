@@ -23,6 +23,7 @@ _PROVIDER_SCHEMA_FIELDS = (
     "timeout",
     "max_concurrency",
     "max_layer2_flows",
+    "packets_per_flow_layer1",
 )
 
 # 需要清理的旧字段名（仅 max_output_tokens，已重命名为 max_tokens）
@@ -92,6 +93,13 @@ def _merge_builtin_provider(providers: list[dict], builtin: dict) -> tuple[bool,
             if not p.get("is_default"):
                 p["is_default"] = True
                 dirty = True
+            # 同步 .env 中可能更新的字段（timeout、api_key 等）
+            for key, value in builtin.items():
+                if key == "name":
+                    continue
+                if p.get(key) != value:
+                    p[key] = value
+                    dirty = True
             found = True
         elif p.get("is_default"):
             # 旧 builtin 与当前 .env 不一致 → 降级，避免出现多个 is_default
@@ -114,7 +122,7 @@ def _backfill_schema_fields(providers: list[dict]) -> bool:
     for p in providers:
         for key in _PROVIDER_SCHEMA_FIELDS:
             if key not in p:
-                p[key] = AI_DEFAULTS.get(key, "openai") if key == "provider_type" else AI_DEFAULTS[key]
+                p[key] = AI_DEFAULTS[key]
                 dirty = True
     return dirty
 
@@ -124,8 +132,7 @@ def _remove_deprecated_fields(providers: list[dict]) -> bool:
     dirty = False
     for p in providers:
         for field in _DEPRECATED_FIELDS:
-            if field in p:
-                p.pop(field, None)
+            if p.pop(field, None) is not None:
                 dirty = True
     return dirty
 

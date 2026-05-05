@@ -21,13 +21,13 @@ def create_ai_engine(ai_config: dict) -> AIEngine:
     实际参数与设置页/配置链不一致。
     """
     return AIEngine(
-        provider_type=ai_config["provider_type"],
-        api_key=ai_config["api_key"],
-        base_url=ai_config["base_url"],
-        model=ai_config["model"],
-        timeout=ai_config["timeout"],
-        context_window_tokens=ai_config["context_window_tokens"],
-        max_tokens=ai_config["max_tokens"],
+        provider_type=ai_config.get("provider_type", "openai"),
+        api_key=ai_config.get("api_key", ""),
+        base_url=ai_config.get("base_url", ""),
+        model=ai_config.get("model", ""),
+        timeout=ai_config.get("timeout"),
+        context_window_tokens=ai_config.get("context_window_tokens"),
+        max_tokens=ai_config.get("max_tokens"),
         max_input_chars=ai_config.get("max_input_chars"),
         temperature=ai_config.get("temperature"),
     )
@@ -38,6 +38,7 @@ def create_prompt_builder(ai_config: dict) -> PromptBuilder:
     return PromptBuilder(
         context_window_tokens=ai_config["context_window_tokens"],
         max_input_chars=ai_config.get("max_input_chars"),
+        packets_per_flow_layer1=ai_config.get("packets_per_flow_layer1"),
     )
 
 

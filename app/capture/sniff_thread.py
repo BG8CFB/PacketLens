@@ -7,7 +7,6 @@ import queue
 import threading
 from typing import Callable
 
-from app.constants import SNAPLEN
 from app.models.packet_record import PacketRecord
 
 logger = logging.getLogger(__name__)
@@ -123,14 +122,13 @@ class SniffThread(threading.Thread):
             self._packet_index += 1
             idx = self._packet_index
 
-        # pcap 优先策略：pcap 队列满则直接丢弃，跳过 record 创建
+        # pcap 优先策略：pcap 队列满时仍创建 PacketRecord（保证 UI 数据完整）
+        pcap_ok = True
         try:
             self._pcap_queue.put_nowait(pkt)
         except queue.Full:
-            logger.warning(f"pcap_queue 已满，丢弃数据包 #{idx}")
-            with self._index_lock:
-                self._dropped_count += 1
-            return
+            pcap_ok = False
+            logger.warning(f"pcap_queue 已满，数据包 #{idx} 未写入 PCAP")
 
         try:
             record = PacketRecord.from_scapy_packet(idx, pkt)
@@ -140,15 +138,14 @@ class SniffThread(threading.Thread):
                 logger.warning(f"capture_queue 已满，丢弃数据包 #{idx}")
                 with self._index_lock:
                     self._dropped_count += 1
-
         except Exception as e:
             logger.warning(f"解析数据包 #{idx} 失败: {e}")
             with self._index_lock:
                 self._dropped_count += 1
 
-    def _stop_check(self, _pkt) -> bool:
-        """Scapy stop_filter 回调：检查停止信号"""
-        return self._stop_event.is_set()
+        if not pcap_ok:
+            with self._index_lock:
+                self._dropped_count += 1
 
     def stop(self, timeout: float = 5.0) -> bool:
         """停止抓包线程

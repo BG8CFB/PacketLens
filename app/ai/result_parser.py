@@ -111,8 +111,8 @@ class ResultParser:
                     category=normalize_category(item.get("category", "General")),
                     title=item.get("title", "未命名"),
                     description=item.get("description", ""),
-                    affected_flows=item.get("affected_flows", []),
-                    affected_ips=item.get("affected_ips", []),
+                    affected_flows=item.get("affected_flows") if isinstance(item.get("affected_flows"), list) else [],
+                    affected_ips=item.get("affected_ips") if isinstance(item.get("affected_ips"), list) else [],
                     recommendation=item.get("recommendation", ""),
                 )
             )
@@ -183,6 +183,26 @@ class ResultParser:
             evidence=evidence,
             raw_text=response_text,
         )
+
+    def _parse_issues(self, items: list) -> list[AnalysisIssue]:
+        """解析 issues 列表，跳过非 dict 元素"""
+        issues = []
+        for item in items:
+            if not isinstance(item, dict):
+                logger.warning(f"跳过非 dict 类型的 issue 元素: {type(item)}")
+                continue
+            issues.append(
+                AnalysisIssue(
+                    severity=normalize_severity(item.get("severity", "Info")),
+                    category=normalize_category(item.get("category", "General")),
+                    title=item.get("title", "未命名"),
+                    description=item.get("description", ""),
+                    affected_flows=item.get("affected_flows") if isinstance(item.get("affected_flows"), list) else [],
+                    affected_ips=item.get("affected_ips") if isinstance(item.get("affected_ips"), list) else [],
+                    recommendation=item.get("recommendation", ""),
+                )
+            )
+        return issues
 
     def _fallback_result(self, raw: str, session_id: str, mode: str) -> AnalysisResult:
         """JSON 解析失败时的降级处理"""

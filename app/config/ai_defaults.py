@@ -6,7 +6,7 @@ Token 三层限制：
   max_input_chars       — 应用层输入字符安全上限（发送前截断检查）
 """
 
-# MiniMax 内置默认 provider 的 AI 配置
+# 内置默认 provider 的 AI 配置
 AI_DEFAULTS = {
     "provider_type": "openai",        # 默认 provider 协议类型（openai / anthropic）
     "context_window_tokens": 200000,  # 模型上下文窗口 200K tokens

@@ -42,7 +42,7 @@ class AIEngine:
         self._model = model or ""
         self._temperature = temperature if temperature is not None else AI_DEFAULTS["temperature"]
         self._max_tokens = max_tokens if max_tokens is not None else AI_DEFAULTS["max_tokens"]
-        self._timeout = timeout or AI_DEFAULTS["timeout"]
+        self._timeout = timeout if timeout is not None else AI_DEFAULTS["timeout"]
         self._context_window_tokens = (
             context_window_tokens if context_window_tokens is not None
             else AI_DEFAULTS["context_window_tokens"]
@@ -85,7 +85,31 @@ class AIEngine:
 
         start = time.time()
         llm = self._llm_with_overrides(temperature, max_tokens)
-        response = llm.invoke(messages)
+        # 瞬时错误重试（429/502/503），最多 3 次，指数退避
+        max_retries = 3
+        last_exc = None
+        for attempt in range(max_retries):
+            try:
+                response = llm.invoke(messages)
+                break
+            except Exception as e:
+                last_exc = e
+                status = getattr(getattr(e, 'status_code', None), '__int__', lambda: 0)()
+                if status in (429, 502, 503) and attempt < max_retries - 1:
+                    wait = 2 ** attempt
+                    logger.warning(f"AI 请求失败 (状态 {status})，{wait}s 后重试 ({attempt + 1}/{max_retries})")
+                    time.sleep(wait)
+                    continue
+                # 非 429/502/503 错误或重试用尽，检查最后一次异常的状态码
+                err_str = str(e)
+                if any(code in err_str for code in ("429", "502", "503")) and attempt < max_retries - 1:
+                    wait = 2 ** attempt
+                    logger.warning(f"AI 请求失败，{wait}s 后重试 ({attempt + 1}/{max_retries}): {err_str[:100]}")
+                    time.sleep(wait)
+                    continue
+                raise
+        else:
+            raise last_exc  # type: ignore[misc]
         elapsed = time.time() - start
 
         # Anthropic 协议的 response.content 可能是 list，空 list 需要特殊处理
@@ -98,7 +122,10 @@ class AIEngine:
                     "  3. 模型生成内容被过滤\n"
                     "建议检查 .env 中的 AI_PROVIDER_TYPE 是否与后端协议匹配"
                 )
-            result = response.text or ""
+            try:
+                result = response.text or ""
+            except (IndexError, AttributeError):
+                result = ""
         else:
             result = response.content or ""
         self._extract_usage(response)

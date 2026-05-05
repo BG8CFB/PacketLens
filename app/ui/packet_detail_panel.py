@@ -179,14 +179,17 @@ class PacketDetailPanel(QWidget):
         item = QTreeWidgetItem(parent, [name, value])
 
     @staticmethod
-    def _format_hex(data: bytes, bytes_per_line: int = 16) -> str:
-        """格式化为 Hex 视图（偏移 + Hex + ASCII）"""
+    def _format_hex(data: bytes, bytes_per_line: int = 16, max_bytes: int = 4096) -> str:
+        """格式化为 Hex 视图（偏移 + Hex + ASCII），限制最大显示字节数"""
         if not data:
             return "无数据"
 
+        truncated = len(data) > max_bytes
+        display_data = data[:max_bytes]
+
         lines = []
-        for offset in range(0, len(data), bytes_per_line):
-            chunk = data[offset : offset + bytes_per_line]
+        for offset in range(0, len(display_data), bytes_per_line):
+            chunk = display_data[offset : offset + bytes_per_line]
 
             # 偏移量
             hex_part = f"{offset:08x}  "
@@ -204,5 +207,8 @@ class PacketDetailPanel(QWidget):
                     ascii_part += "."
 
             lines.append(hex_part + ascii_part)
+
+        if truncated:
+            lines.append(f"\n... 省略 {len(data) - max_bytes} 字节")
 
         return "\n".join(lines)

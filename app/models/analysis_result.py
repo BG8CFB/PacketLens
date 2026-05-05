@@ -60,6 +60,11 @@ class FlowAnalysis:
 
     VALID_VERDICTS = frozenset({"malicious", "suspicious", "benign", "inconclusive", "degraded"})
 
+    def __post_init__(self):
+        self.confidence = max(0.0, min(1.0, self.confidence))
+        if self.verdict not in self.VALID_VERDICTS:
+            self.verdict = "inconclusive"
+
     def to_dict(self) -> dict:
         """序列化为字典"""
         return {
@@ -75,11 +80,16 @@ class FlowAnalysis:
     def from_dict(cls, data: dict) -> FlowAnalysis:
         """从字典反序列化"""
         issues_data = data.get("issues", [])
-        issues = [AnalysisIssue.from_dict(i) for i in issues_data]
+        issues = [AnalysisIssue.from_dict(i) for i in issues_data if isinstance(i, dict)]
+        confidence = 0.0
+        try:
+            confidence = max(0.0, min(1.0, float(data.get("confidence", 0.0))))
+        except (TypeError, ValueError):
+            pass
         return cls(
             flow_id=data.get("flow_id", ""),
             verdict=data.get("verdict", "inconclusive"),
-            confidence=max(0.0, min(1.0, data.get("confidence", 0.0))),
+            confidence=confidence,
             issues=issues,
             evidence=data.get("evidence", []),
             raw_text=data.get("raw_text", ""),
@@ -151,7 +161,10 @@ class AnalysisResult:
         flow_analyses = [FlowAnalysis.from_dict(fa) for fa in flow_analyses_data]
         timestamp_str = data.get("timestamp", "")
         if timestamp_str:
-            timestamp = datetime.fromisoformat(timestamp_str)
+            try:
+                timestamp = datetime.fromisoformat(timestamp_str)
+            except ValueError:
+                timestamp = datetime.now(tz=timezone.utc)
             if timestamp.tzinfo is None:
                 timestamp = timestamp.replace(tzinfo=timezone.utc)
         else:

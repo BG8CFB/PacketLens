@@ -74,9 +74,10 @@ SCROLLBAR_STYLE = """
 def create_application() -> QApplication:
     """创建并配置 QApplication 实例"""
     app = QApplication(sys.argv)
-    app.setApplicationName("PacketLens")
-    app.setApplicationVersion("1.0.0")
-    app.setOrganizationName("PacketLens")
+    from app.constants import APP_NAME, APP_VERSION
+    app.setApplicationName(APP_NAME)
+    app.setApplicationVersion(APP_VERSION)
+    app.setOrganizationName(APP_NAME)
 
     # 强制 Fusion 风格，确保 QSS 在所有控件（含 QTableView 滚动条）上完全生效
     app.setStyle("Fusion")

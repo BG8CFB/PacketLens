@@ -36,8 +36,14 @@ def list_interfaces() -> list[NICInfo]:
     result: list[NICInfo] = []
 
     for iface in raw_ifaces:
-        ip = get_if_addr(iface)
-        mac = get_if_hwaddr(iface)
+        try:
+            ip = get_if_addr(iface)
+        except (ValueError, OSError):
+            ip = None
+        try:
+            mac = get_if_hwaddr(iface)
+        except (ValueError, OSError):
+            mac = None
 
         # 判断是否为回环
         description = getattr(iface, "description", str(iface)) or str(iface)
@@ -68,8 +74,14 @@ def get_default_interface() -> NICInfo | None:
     if iface is None:
         return None
 
-    ip = get_if_addr(iface)
-    mac = get_if_hwaddr(iface)
+    try:
+        ip = get_if_addr(iface)
+    except (ValueError, OSError):
+        ip = None
+    try:
+        mac = get_if_hwaddr(iface)
+    except (ValueError, OSError):
+        mac = None
 
     return NICInfo(
         name=getattr(iface, "name", str(iface)),

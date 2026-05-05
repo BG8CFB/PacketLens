@@ -272,7 +272,7 @@ class SettingsDialog(QDialog):
         grid.addWidget(self._api_base_edit, 1, 1)
 
         self._model_edit = QLineEdit()
-        self._model_edit.setPlaceholderText("例: gpt-4o, MiniMax-M2.7")
+        self._model_edit.setPlaceholderText("输入模型 ID")
         grid.addWidget(_lbl("模型 ID:"), 1, 2)
         grid.addWidget(self._model_edit, 1, 3)
 
@@ -297,7 +297,7 @@ class SettingsDialog(QDialog):
         grid.addWidget(self._temperature_spin, 3, 1)
 
         self._timeout_spin = QSpinBox()
-        self._timeout_spin.setRange(10, 600)
+        self._timeout_spin.setRange(10, 3600)
         self._timeout_spin.setSuffix(" 秒")
         grid.addWidget(_lbl("超时:"), 3, 2)
         grid.addWidget(self._timeout_spin, 3, 3)
@@ -447,14 +447,12 @@ class SettingsDialog(QDialog):
             self._api_base_edit.setToolTip(
                 "Anthropic 协议默认走官方 API，需要中转/自建端点时填此处"
             )
-            self._model_edit.setPlaceholderText(
-                "例: claude-sonnet-4-20250514, claude-opus-4-20250514"
-            )
+            self._model_edit.setPlaceholderText("输入模型 ID，如 claude-3-opus 或 claude-3-sonnet")
         else:
-            self._api_base_edit.setPlaceholderText("例: https://api.openai.com/v1")
+            self._api_base_edit.setPlaceholderText("例: https://api.example.com/v1")
             self._api_base_edit.setToolTip("")
             self._model_edit.setPlaceholderText(
-                "例: gpt-4o, deepseek-chat, MiniMax-M2.7"
+                "输入模型 ID，如 gpt-4o 或 gpt-4o-mini"
             )
 
     def _load_provider_to_form(self) -> None:

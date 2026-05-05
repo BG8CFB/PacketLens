@@ -189,12 +189,13 @@ class MainWindow(QMainWindow):
             "<h3>PacketLens</h3>"
             "<p>Windows 桌面抓包 + AI 流量分析工具</p>"
             "<p>基于 Python 3.11 / PySide6 / Scapy / LangChain</p>"
-            "<p>版本: 0.1.0</p>",
+            f"<p>版本: {__import__('app.constants', fromlist=['APP_VERSION']).APP_VERSION}</p>",
         )
 
     def _open_settings(self) -> None:
         dialog = SettingsDialog(self._config, parent=self)
         if dialog.exec() == QDialog.Accepted:
+            self._cancel_active_worker()
             ai_cfg = self._config.get_ai_config()
             self._ai_engine = create_ai_engine(ai_cfg)
             self._prompt_builder = create_prompt_builder(ai_cfg)
@@ -387,6 +388,9 @@ class MainWindow(QMainWindow):
         self._analysis_panel.update_stage(stage)
 
     def _on_analysis_completed(self, result: AnalysisResult) -> None:
+        # 防止已取消/替换的 worker 回调
+        if self._analysis_worker is not None and self.sender() != self._analysis_worker:
+            return
         self._analysis_panel.display_results(result)
         self._status_bar.showMessage(
             f"AI 分析完成: {len(result.issues)} 个发现, "
@@ -397,6 +401,8 @@ class MainWindow(QMainWindow):
         self._analysis_worker = None
 
     def _on_analysis_error(self, error: str) -> None:
+        if self._analysis_worker is not None and self.sender() != self._analysis_worker:
+            return
         self._analysis_panel.reset_from_error(error)
         self._status_bar.showMessage(f"AI 分析失败: {error[:100]}")
         self._analysis_worker = None
@@ -415,8 +421,6 @@ class MainWindow(QMainWindow):
         """窗口关闭时清理所有资源"""
         if self._engine.is_capturing:
             self._engine.stop_capture()
-        if hasattr(self._engine, 'cleanup'):
-            self._engine.cleanup()
-        # 完整取消 AI 分析 Worker（断开信号 + 等待结束）
+        self._engine.cleanup()
         self._cancel_active_worker()
         event.accept()

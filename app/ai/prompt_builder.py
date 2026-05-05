@@ -56,8 +56,8 @@ def _smart_truncate_blocks(text: str, limit: int, separator: str = "\n\n---\n\n"
         result_parts.append(f"...[已截断，省略 {omitted} 条流的详细分析]")
     return separator.join(result_parts)
 
-# Layer 1 每条流的固定采样包数（从配置读取）
-PACKETS_PER_FLOW_LAYER1 = AI_DEFAULTS["packets_per_flow_layer1"]
+# Layer 1 每条流默认采样包数（仅做兜底，实际值从 PromptBuilder 实例读取）
+_DEFAULT_PACKETS_PER_FLOW = AI_DEFAULTS["packets_per_flow_layer1"]
 
 # Layer 3 截断长度（字符数），基于 max_input_chars 按比例分配
 _LAYER3_LAYER1_RATIO = 0.40   # Layer1 结果占输入上限的 40%
@@ -71,6 +71,7 @@ class PromptBuilder:
         self,
         context_window_tokens: int | None = None,
         max_input_chars: int | None = None,
+        packets_per_flow_layer1: int | None = None,
     ):
         self._context_window_tokens = (
             context_window_tokens if context_window_tokens is not None
@@ -79,6 +80,10 @@ class PromptBuilder:
         self._max_input_chars = (
             max_input_chars if max_input_chars is not None
             else AI_DEFAULTS["max_input_chars"]
+        )
+        self._packets_per_flow_layer1 = (
+            packets_per_flow_layer1 if packets_per_flow_layer1 is not None
+            else _DEFAULT_PACKETS_PER_FLOW
         )
 
     # ── Layer 1: 全量流量分析 ──
@@ -189,7 +194,7 @@ class PromptBuilder:
         # 每条流 + 采样包
         flow_sections = []
         for flow in flows:
-            section = _format_flow_with_packets(flow, packets, PACKETS_PER_FLOW_LAYER1)
+            section = _format_flow_with_packets(flow, packets, self._packets_per_flow_layer1)
             flow_sections.append(section)
 
         user_prompt = get_layer1_template().format(
@@ -225,7 +230,7 @@ class PromptBuilder:
 
         logger.info(
             f"Layer1 prompt: {len(flows)} 条流, "
-            f"每流 {PACKETS_PER_FLOW_LAYER1} 包采样, "
+            f"每流 {self._packets_per_flow_layer1} 包采样, "
             f"prompt 长度 {len(user_prompt)} 字符"
         )
 

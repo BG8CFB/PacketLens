@@ -1,36 +1,43 @@
 """Npcap 安装检测与管理"""
 
 import ctypes
+import logging
 import os
-import subprocess
 import sys
 import webbrowser
 from pathlib import Path
 
+logger = logging.getLogger(__name__)
+
 
 def is_npcap_installed() -> bool:
-    """检测 Npcap 是否已安装（检查核心 DLL）"""
+    """检测 Npcap 是否已安装（优先检查核心 DLL 存在性）"""
+    if sys.platform != "win32":
+        return False
+
     system32 = Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32"
 
-    # 检查 Npcap 目录下的 wpcap.dll
+    # 主检测：Npcap 目录下的 wpcap.dll
     npcap_dll = system32 / "Npcap" / "wpcap.dll"
     if npcap_dll.exists():
         return True
 
-    # 检查注册表（备选）
+    # 回退：System32 根目录（旧版安装路径）
+    fallback_dll = system32 / "wpcap.dll"
+    if fallback_dll.exists():
+        return True
+
+    # 注册表备选（检查多个路径）
     try:
         import winreg
-
-        key = winreg.OpenKey(
-            winreg.HKEY_LOCAL_MACHINE,
-            r"SOFTWARE\WOW6432Node\Npcap",
-        )
-        try:
-            winreg.CloseKey(key)
-        except OSError:
-            pass
-        return True
-    except (OSError, ImportError):
+        for reg_path in (r"SOFTWARE\Npcap", r"SOFTWARE\WOW6432Node\Npcap"):
+            try:
+                key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, reg_path)
+                winreg.CloseKey(key)
+                return True
+            except OSError:
+                continue
+    except ImportError:
         pass
 
     return False
@@ -38,6 +45,8 @@ def is_npcap_installed() -> bool:
 
 def get_npcap_dll_path() -> str | None:
     """获取 Npcap DLL 路径"""
+    if sys.platform != "win32":
+        return None
     system32 = Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32"
     dll = system32 / "Npcap" / "wpcap.dll"
     if dll.exists():
@@ -62,8 +71,8 @@ def open_npcap_download():
     """
     try:
         webbrowser.open(_NPCAP_URL)
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning(f"无法打开浏览器: {e}")
     return _NPCAP_URL
 
 

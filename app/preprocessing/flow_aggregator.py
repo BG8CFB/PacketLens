@@ -54,7 +54,7 @@ class FlowAggregator:
                 flow = self._flows[flow_key]
                 # 检查流超时：如果距离 last_seen 超过阈值，归档旧流并创建新流
                 timeout = self._get_timeout(packet.protocol)
-                if timeout > 0 and (packet.timestamp - flow.last_seen) > timeout:
+                if timeout > 0 and packet.timestamp is not None and (packet.timestamp - flow.last_seen) > timeout:
                     # 修改归档流的 flow_id 以区分新流（归档前修改）
                     flow.flow_id = f"{flow.flow_id}_{int(flow.last_seen)}"
                     if len(self._expired_flows) < MAX_EXPIRED_FLOWS:
