@@ -1,0 +1,82 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <defs>
+    <!-- 主渐变：深蓝到青色 -->
+    <linearGradient id="lensGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#1a73e8"/>
+      <stop offset="100%" stop-color="#00bcd4"/>
+    </linearGradient>
+    <!-- AI 脑渐变 -->
+    <linearGradient id="brainGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#7c4dff"/>
+      <stop offset="100%" stop-color="#448aff"/>
+    </linearGradient>
+    <!-- 手柄渐变 -->
+    <linearGradient id="handleGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#455a64"/>
+      <stop offset="100%" stop-color="#37474f"/>
+    </linearGradient>
+    <!-- 镜片内光晕 -->
+    <radialGradient id="glowGrad" cx="40%" cy="35%" r="60%">
+      <stop offset="0%" stop-color="#ffffff" stop-opacity="0.3"/>
+      <stop offset="100%" stop-color="#ffffff" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <!-- 背景：无（透明，用于 ICO 转换） -->
+
+  <!-- 放大镜手柄 -->
+  <rect x="162" y="158" width="26" height="72" rx="8" transform="rotate(-45, 175, 194)" fill="url(#handleGrad)"/>
+  <!-- 手柄高光 -->
+  <rect x="166" y="162" width="8" height="60" rx="4" transform="rotate(-45, 170, 192)" fill="#546e7a" opacity="0.6"/>
+
+  <!-- 放大镜外环 -->
+  <circle cx="112" cy="104" r="82" fill="url(#lensGrad)"/>
+  <!-- 外环描边 -->
+  <circle cx="112" cy="104" r="82" fill="none" stroke="#0d47a1" stroke-width="4" opacity="0.3"/>
+  <!-- 镜片内部（深色背景） -->
+  <circle cx="112" cy="104" r="68" fill="#0a1929"/>
+  <!-- 镜片光晕 -->
+  <circle cx="112" cy="104" r="68" fill="url(#glowGrad)"/>
+
+  <!-- 数据包网格（代表 Packet） -->
+  <!-- 第一行 -->
+  <rect x="60" y="72" width="24" height="12" rx="3" fill="#00bcd4" opacity="0.9"/>
+  <rect x="88" y="72" width="36" height="12" rx="3" fill="#1a73e8" opacity="0.9"/>
+  <rect x="128" y="72" width="18" height="12" rx="3" fill="#00bcd4" opacity="0.7"/>
+  <!-- 第二行 -->
+  <rect x="60" y="88" width="32" height="12" rx="3" fill="#448aff" opacity="0.9"/>
+  <rect x="96" y="88" width="20" height="12" rx="3" fill="#00bcd4" opacity="0.8"/>
+  <rect x="120" y="88" width="28" height="12" rx="3" fill="#7c4dff" opacity="0.7"/>
+  <!-- 第三行 -->
+  <rect x="60" y="104" width="18" height="12" rx="3" fill="#00bcd4" opacity="0.7"/>
+  <rect x="82" y="104" width="40" height="12" rx="3" fill="#1a73e8" opacity="0.9"/>
+  <rect x="126" y="104" width="22" height="12" rx="3" fill="#448aff" opacity="0.8"/>
+  <!-- 第四行 -->
+  <rect x="60" y="120" width="28" height="12" rx="3" fill="#7c4dff" opacity="0.7"/>
+  <rect x="92" y="120" width="16" height="12" rx="3" fill="#00bcd4" opacity="0.9"/>
+  <rect x="112" y="120" width="34" height="12" rx="3" fill="#1a73e8" opacity="0.8"/>
+  <!-- 第五行 -->
+  <rect x="60" y="136" width="22" height="12" rx="3" fill="#1a73e8" opacity="0.8"/>
+  <rect x="86" y="136" width="30" height="12" rx="3" fill="#00bcd4" opacity="0.7"/>
+  <rect x="120" y="136" width="26" height="12" rx="3" fill="#448aff" opacity="0.9"/>
+
+  <!-- AI 神经元节点（代表 AI 分析） -->
+  <circle cx="90" cy="100" r="5" fill="url(#brainGrad)" opacity="0.95"/>
+  <circle cx="118" cy="82" r="4" fill="url(#brainGrad)" opacity="0.85"/>
+  <circle cx="132" cy="110" r="4.5" fill="url(#brainGrad)" opacity="0.9"/>
+  <circle cx="78" cy="122" r="3.5" fill="url(#brainGrad)" opacity="0.8"/>
+
+  <!-- 神经连接线 -->
+  <line x1="90" y1="100" x2="118" y2="82" stroke="#7c4dff" stroke-width="1.5" opacity="0.6"/>
+  <line x1="90" y1="100" x2="132" y2="110" stroke="#448aff" stroke-width="1.5" opacity="0.5"/>
+  <line x1="90" y1="100" x2="78" y2="122" stroke="#7c4dff" stroke-width="1.5" opacity="0.5"/>
+  <line x1="118" y1="82" x2="132" y2="110" stroke="#448aff" stroke-width="1" opacity="0.4"/>
+
+  <!-- 外环高光弧线 -->
+  <path d="M 55 45 A 72 72 0 0 1 155 45" fill="none" stroke="#ffffff" stroke-width="3" opacity="0.25" stroke-linecap="round"/>
+
+  <!-- 信号波纹（右上角，代表网络活动） -->
+  <path d="M 170 42 Q 178 32, 186 42" fill="none" stroke="#00bcd4" stroke-width="2.5" opacity="0.8" stroke-linecap="round"/>
+  <path d="M 164 34 Q 178 18, 192 34" fill="none" stroke="#00bcd4" stroke-width="2" opacity="0.5" stroke-linecap="round"/>
+  <path d="M 158 26 Q 178 4, 198 26" fill="none" stroke="#00bcd4" stroke-width="1.5" opacity="0.3" stroke-linecap="round"/>
+</svg>
