@@ -7,6 +7,8 @@ from pathlib import Path
 import pytest
 
 from app.config.ai_defaults import AI_DEFAULTS
+from app.config.app_config_schema import ensure_app_config_schema
+from app.constants import DEFAULT_CAPTURE_DURATION, MAX_CAPTURE_DURATION, MIN_CAPTURE_DURATION
 from app.config import provider_loader
 from app.storage.config_manager import ConfigManager, DEFAULT_CONFIG
 
@@ -62,7 +64,7 @@ class TestConfigManagerBasics:
         m = ConfigManager(config_path=path)
 
         assert m.get("theme") == "dark"
-        assert m.get("default_capture_duration") == 60
+        assert m.get("default_capture_duration") == DEFAULT_CAPTURE_DURATION
         assert m.get("auto_analyze") is True
         assert m.get("auto_save_pcap") is True
         assert m.get("default_mode") == "quick"
@@ -87,14 +89,15 @@ class TestConfigManagerBasics:
         assert m2.get("custom_key") == "custom_val"
 
     def test_overwrite_existing(self, config_path: Path):
-        """已有配置文件应被正确读取"""
+        """已有配置文件应被正确读取，缺失键由 schema 迁移自动补全"""
         config_path.parent.mkdir(parents=True, exist_ok=True)
         config_path.write_text(json.dumps({"theme": "custom", "extra": 42}))
 
         m = ConfigManager(config_path=config_path)
         assert m.get("theme") == "custom"
         assert m.get("extra") == 42
-        assert m.get("default_capture_duration") is None
+        # 缺失的 default_capture_duration 由 schema 迁移自动补全
+        assert m.get("default_capture_duration") == DEFAULT_CAPTURE_DURATION
 
     def test_corrupt_file_fallback(self, config_path: Path):
         """损坏的 JSON 文件应回退到默认值"""
@@ -977,3 +980,66 @@ class TestBuiltinProviderEnvSync:
         # 内置 provider 的 timeout 应被更新
         builtin = [p for p in providers2 if p["name"] == "BuiltinAI"][0]
         assert builtin["timeout"] == 999
+
+
+# ── 十、应用级配置 schema 迁移 ──
+
+
+class TestAppConfigSchema:
+    """ensure_app_config_schema 补全缺失键、校验数值范围"""
+
+    def test_backfill_missing_keys(self):
+        """缺失的应用级配置键应被补全"""
+        config = {"theme": "dark"}
+        dirty = ensure_app_config_schema(config)
+        assert dirty is True
+        assert config["default_capture_duration"] == DEFAULT_CAPTURE_DURATION
+        assert config["auto_analyze"] is True
+
+    def test_no_change_when_all_keys_present(self):
+        """所有键已存在时不修改"""
+        config = {
+            "theme": "dark",
+            "default_capture_duration": 120,
+            "auto_analyze": False,
+            "auto_save_pcap": True,
+            "default_mode": "deep",
+            "last_interface": "eth0",
+            "window_geometry": "100x200",
+        }
+        dirty = ensure_app_config_schema(config)
+        assert dirty is False
+        # 用户自定义值不被覆盖
+        assert config["default_capture_duration"] == 120
+        assert config["auto_analyze"] is False
+
+    def test_clamp_duration_below_min(self):
+        """default_capture_duration 低于最小值应被修正"""
+        config = {"default_capture_duration": 1}
+        dirty = ensure_app_config_schema(config)
+        assert dirty is True
+        assert config["default_capture_duration"] == MIN_CAPTURE_DURATION
+
+    def test_clamp_duration_above_max(self):
+        """default_capture_duration 超过最大值应被修正"""
+        config = {"default_capture_duration": 9999}
+        dirty = ensure_app_config_schema(config)
+        assert dirty is True
+        assert config["default_capture_duration"] == MAX_CAPTURE_DURATION
+
+    def test_valid_duration_not_clamped(self):
+        """合法范围内的值不被修正"""
+        config = {"default_capture_duration": 45}
+        dirty = ensure_app_config_schema(config)
+        # dirty 仅当缺失键被补全时为 True（45 在范围内但其他键缺失）
+        assert config["default_capture_duration"] == 45
+
+    def test_integrated_with_config_manager_load(self, config_path: Path):
+        """旧配置缺少键时，ConfigManager.load 应自动补全"""
+        old_config = {"theme": "light", "auto_analyze": True}
+        config_path.parent.mkdir(parents=True, exist_ok=True)
+        config_path.write_text(json.dumps(old_config))
+
+        m = ConfigManager(config_path=config_path)
+        assert m.get("default_capture_duration") == DEFAULT_CAPTURE_DURATION
+        assert m.get("auto_save_pcap") is True

@@ -106,6 +106,13 @@ class TestFaultCounter:
 
 
 class TestARPSpoof:
+    def _build_arp_counter(self, packets):
+        """从包列表构建 FaultCounter（模拟增量追踪）"""
+        counter = FaultCounter()
+        for pkt in packets:
+            counter.update(pkt)
+        return counter
+
     def test_detects_arp_spoof(self):
         packets = [
             _make_packet(protocol="ARP", arp_op=2, src_ip="192.168.1.1",
@@ -117,8 +124,9 @@ class TestARPSpoof:
                          src_mac="aa:bb:cc:dd:ee:02", index=i)
             for i in range(3, 6)
         ]
+        counter = self._build_arp_counter(packets)
         detector = FaultDetector()
-        alerts = detector._detect_arp_spoof(packets)
+        alerts = detector._detect_arp_spoof(counter)
         assert len(alerts) == 1
         assert alerts[0].type == "arp_spoof"
         assert alerts[0].severity == "Warning"
@@ -129,8 +137,9 @@ class TestARPSpoof:
                          src_mac="aa:bb:cc:dd:ee:ff", index=i)
             for i in range(5)
         ]
+        counter = self._build_arp_counter(packets)
         detector = FaultDetector()
-        alerts = detector._detect_arp_spoof(packets)
+        alerts = detector._detect_arp_spoof(counter)
         assert len(alerts) == 0
 
     def test_critical_arp_spoof(self):
@@ -140,8 +149,9 @@ class TestARPSpoof:
                 _make_packet(protocol="ARP", arp_op=2, src_ip="192.168.1.1",
                              src_mac=f"aa:bb:cc:dd:ee:{i:02x}", index=i)
             )
+        counter = self._build_arp_counter(packets)
         detector = FaultDetector()
-        alerts = detector._detect_arp_spoof(packets)
+        alerts = detector._detect_arp_spoof(counter)
         assert len(alerts) == 1
         assert alerts[0].severity == "Critical"
 

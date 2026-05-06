@@ -11,15 +11,17 @@ import threading
 from pathlib import Path
 
 from app.config.ai_defaults import AI_DEFAULTS
+from app.config.app_config_schema import ensure_app_config_schema
 from app.config.provider_loader import load_builtin_provider
 from app.config.provider_schema import ensure_provider_schema
+from app.constants import DEFAULT_CAPTURE_DURATION
 from app.utils.path_helpers import atomic_write, get_config_path
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_CONFIG = {
     "theme": "dark",
-    "default_capture_duration": 60,
+    "default_capture_duration": DEFAULT_CAPTURE_DURATION,
     "auto_analyze": True,
     "auto_save_pcap": True,
     "default_mode": "quick",
@@ -62,6 +64,10 @@ class ConfigManager:
                     self._config = DEFAULT_CONFIG.copy()
             else:
                 self._config = DEFAULT_CONFIG.copy()
+                self.save()
+
+            # 应用级配置 schema 升级（补全缺失字段、范围校验）
+            if ensure_app_config_schema(self._config):
                 self.save()
 
             # Provider schema 升级（补全字段、清理旧字段、校验激活项）

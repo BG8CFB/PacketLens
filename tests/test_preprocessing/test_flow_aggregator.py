@@ -8,7 +8,7 @@ from app.preprocessing.flow_aggregator import FlowAggregator, TCP_FLOW_TIMEOUT
 
 
 def _make_pkt(index, src_ip, dst_ip, src_port, dst_port, protocol, length, timestamp,
-              flags=None, raw_bytes=None):
+              flags=None, raw_bytes=None, tcp_seq=None, tcp_ack=None, tcp_window=None):
     """辅助函数：快速创建 PacketRecord"""
     return PacketRecord(
         index=index, timestamp=timestamp,
@@ -16,7 +16,7 @@ def _make_pkt(index, src_ip, dst_ip, src_port, dst_port, protocol, length, times
         src_port=src_port, dst_port=dst_port,
         protocol=protocol, length=length,
         info="", raw_bytes=raw_bytes or b"\x00" * length,
-        flags=flags,
+        flags=flags, tcp_seq=tcp_seq, tcp_ack=tcp_ack, tcp_window=tcp_window,
     )
 
 
@@ -293,3 +293,172 @@ class TestFlowAggregator:
         agg.update(_make_pkt(0, "10.0.0.1", "10.0.0.2", 53, 53,
                              "UDP", 100, 0.0))
         assert agg.get_flows()[0].flags_set == set()
+
+
+class TestTcpHealthBidirectional:
+    """TCP 健康度追踪：双向流序列号方向隔离测试
+
+    核心验证：A→B 和 B→A 的序列号不能交叉比较，
+    否则双向 TCP 流中约 50% 的包会被误判为重传。
+    """
+
+    def test_bidirectional_no_false_retransmit(self):
+        """双向 TCP 流：两端各自递增序列号，不应被误判为重传"""
+        agg = FlowAggregator()
+        # 客户端 → 服务器 (seq 从 1000 递增)
+        for i in range(5):
+            agg.update(_make_pkt(
+                i, "10.0.0.1", "10.0.0.2", 12345, 80,
+                "TCP", 200, float(i), flags="A",
+                tcp_seq=1000 + i * 100,
+            ))
+        # 服务器 → 客户端 (seq 从 5000 递增，不同序列号空间)
+        for i in range(5):
+            agg.update(_make_pkt(
+                5 + i, "10.0.0.2", "10.0.0.1", 80, 12345,
+                "TCP", 300, float(5 + i), flags="A",
+                tcp_seq=5000 + i * 200,
+            ))
+
+        flows = agg.get_flows()
+        assert len(flows) == 1
+        f = flows[0]
+        assert f.packet_count == 10
+        # 关键断言：双向流的序列号不应交叉误判为重传
+        assert f.retransmit_count == 0, (
+            f"期望 0 重传，实际 {f.retransmit_count}（双向序列号交叉对比 Bug）"
+        )
+
+    def test_true_retransmit_detected_per_direction(self):
+        """同一方向的真实重传应被检测到"""
+        agg = FlowAggregator()
+        # 正常递增
+        agg.update(_make_pkt(
+            0, "10.0.0.1", "10.0.0.2", 12345, 80,
+            "TCP", 200, 0.0, flags="A", tcp_seq=1000,
+        ))
+        agg.update(_make_pkt(
+            1, "10.0.0.1", "10.0.0.2", 12345, 80,
+            "TCP", 200, 1.0, flags="A", tcp_seq=1200,
+        ))
+        # 真实重传：seq 回退
+        agg.update(_make_pkt(
+            2, "10.0.0.1", "10.0.0.2", 12345, 80,
+            "TCP", 200, 2.0, flags="A", tcp_seq=1000,
+        ))
+
+        flows = agg.get_flows()
+        assert len(flows) == 1
+        assert flows[0].retransmit_count == 1
+
+    def test_pure_ack_not_counted_as_retransmit(self):
+        """纯 ACK（无 payload，length < 54）不计为重传"""
+        agg = FlowAggregator()
+        agg.update(_make_pkt(
+            0, "10.0.0.1", "10.0.0.2", 12345, 80,
+            "TCP", 200, 0.0, flags="A", tcp_seq=1000,
+        ))
+        # 纯 ACK：seq 回退但无 payload（length=40 < 54）
+        agg.update(_make_pkt(
+            1, "10.0.0.1", "10.0.0.2", 12345, 80,
+            "TCP", 40, 1.0, flags="A", tcp_seq=500,
+        ))
+
+        flows = agg.get_flows()
+        assert len(flows) == 1
+        assert flows[0].retransmit_count == 0
+
+    def test_dup_ack_per_direction(self):
+        """重复 ACK 应按方向独立计数"""
+        agg = FlowAggregator()
+        # 正向：同一个 ack 出现 3 次 → 触发 dup_ack
+        for i in range(3):
+            agg.update(_make_pkt(
+                i, "10.0.0.1", "10.0.0.2", 12345, 80,
+                "TCP", 40, float(i), flags="A",
+                tcp_seq=100, tcp_ack=5000,
+            ))
+        # 反向：同一个 ack 出现 3 次 → 也触发 dup_ack
+        for i in range(3):
+            agg.update(_make_pkt(
+                3 + i, "10.0.0.2", "10.0.0.1", 80, 12345,
+                "TCP", 40, float(3 + i), flags="A",
+                tcp_seq=5000, tcp_ack=200,
+            ))
+
+        flows = agg.get_flows()
+        assert len(flows) == 1
+        # 两个方向各触发一次 dup_ack
+        assert flows[0].dup_ack_count == 2
+
+    def test_cross_direction_ack_no_false_dup(self):
+        """跨方向相同 ACK 值不应触发重复 ACK 误判"""
+        agg = FlowAggregator()
+        # 正向 ack=1000 两次
+        agg.update(_make_pkt(
+            0, "10.0.0.1", "10.0.0.2", 12345, 80,
+            "TCP", 40, 0.0, flags="A", tcp_seq=100, tcp_ack=1000,
+        ))
+        # 反向 ack=1000 一次（与正向 ack 值相同但方向不同，不应叠加）
+        agg.update(_make_pkt(
+            1, "10.0.0.2", "10.0.0.1", 80, 12345,
+            "TCP", 40, 1.0, flags="A", tcp_seq=5000, tcp_ack=1000,
+        ))
+
+        flows = agg.get_flows()
+        assert len(flows) == 1
+        assert flows[0].dup_ack_count == 0
+
+    def test_zero_window_detected(self):
+        """零窗口应被正确检测"""
+        agg = FlowAggregator()
+        agg.update(_make_pkt(
+            0, "10.0.0.1", "10.0.0.2", 12345, 80,
+            "TCP", 40, 0.0, flags="A", tcp_seq=100, tcp_window=0,
+        ))
+        agg.update(_make_pkt(
+            1, "10.0.0.1", "10.0.0.2", 12345, 80,
+            "TCP", 40, 1.0, flags="A", tcp_seq=101, tcp_window=65535,
+        ))
+        agg.update(_make_pkt(
+            2, "10.0.0.1", "10.0.0.2", 12345, 80,
+            "TCP", 40, 2.0, flags="A", tcp_seq=102, tcp_window=0,
+        ))
+
+        flows = agg.get_flows()
+        assert flows[0].zero_window_count == 2
+
+    def test_rst_detected(self):
+        """RST 包应被正确计数"""
+        agg = FlowAggregator()
+        agg.update(_make_pkt(
+            0, "10.0.0.1", "10.0.0.2", 12345, 80,
+            "TCP", 40, 0.0, flags="R", tcp_seq=100,
+        ))
+        agg.update(_make_pkt(
+            1, "10.0.0.1", "10.0.0.2", 12345, 80,
+            "TCP", 200, 1.0, flags="A", tcp_seq=1000,
+        ))
+
+        flows = agg.get_flows()
+        assert flows[0].rst_count == 1
+        assert flows[0].retransmit_count == 0
+
+    def test_seq_wrap_around_handled(self):
+        """32 位序列号回绕应正确处理"""
+        agg = FlowAggregator()
+        # seq 接近最大值
+        agg.update(_make_pkt(
+            0, "10.0.0.1", "10.0.0.2", 12345, 80,
+            "TCP", 200, 0.0, flags="A", tcp_seq=0xFFFFFFF0,
+        ))
+        # seq 回绕到小值（正常前进）
+        agg.update(_make_pkt(
+            1, "10.0.0.1", "10.0.0.2", 12345, 80,
+            "TCP", 200, 1.0, flags="A", tcp_seq=0x00000100,
+        ))
+
+        flows = agg.get_flows()
+        assert flows[0].retransmit_count == 0, (
+            "序列号回绕后的正常前进不应被判为重传"
+        )

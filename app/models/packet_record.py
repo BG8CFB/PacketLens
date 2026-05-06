@@ -670,6 +670,54 @@ def _dns_name_length(data: bytes, offset: int) -> int:
     return pos - offset
 
 
+def _parse_first_dns_answer(payload: bytes, qdcount: int, question_end_offset: int) -> str:
+    """解析 DNS 响应中首条 A/AAAA/CNAME 记录，返回解析结果字符串"""
+    try:
+        ancount = (payload[6] << 8) | payload[7] if len(payload) > 7 else 0
+        if ancount == 0:
+            return ""
+
+        # 跳过所有 question section
+        offset = question_end_offset
+        for _ in range(qdcount):
+            if offset >= len(payload):
+                return ""
+            name_len = _dns_name_length(payload, offset)
+            offset += name_len + 4  # name + qtype(2) + qclass(2)
+            if offset > len(payload):
+                return ""
+
+        # 解析首条 answer
+        if offset >= len(payload):
+            return ""
+        ans_name_len = _dns_name_length(payload, offset)
+        ans_type_offset = offset + ans_name_len
+        if ans_type_offset + 10 > len(payload):
+            return ""
+
+        ans_type = (payload[ans_type_offset] << 8) | payload[ans_type_offset + 1]
+        rdlength = (payload[ans_type_offset + 8] << 8) | payload[ans_type_offset + 9]
+        rdata_offset = ans_type_offset + 10
+
+        if ans_type == 1 and rdlength == 4 and rdata_offset + 4 <= len(payload):
+            # A record
+            return ".".join(str(payload[rdata_offset + i]) for i in range(4))
+        elif ans_type == 28 and rdlength == 16 and rdata_offset + 16 <= len(payload):
+            # AAAA record
+            import socket
+            try:
+                return socket.inet_ntop(socket.AF_INET6, payload[rdata_offset:rdata_offset + 16])
+            except (ValueError, OSError):
+                return ""
+        elif ans_type == 5:
+            # CNAME record
+            cname = _extract_dns_name(payload, rdata_offset)
+            return f"CNAME {cname}" if cname else ""
+    except (IndexError, ValueError):
+        pass
+    return ""
+
+
 def _format_dns_info(payload: bytes) -> str:
     """格式化 DNS payload 为 Wireshark 风格信息行
 
@@ -708,5 +756,11 @@ def _format_dns_info(payload: bytes) -> str:
         parts.append(domain)
     if qr and rcode != 0:
         parts.append(DNS_RCODES.get(rcode, f"RCode {rcode}"))
+
+    # DNS 响应解析结果（首条 A/AAAA/CNAME 记录）
+    if qr and rcode == 0:
+        answer_str = _parse_first_dns_answer(payload, qdcount, qtype_offset if qdcount > 0 else 12)
+        if answer_str:
+            parts.append(f"-> {answer_str}")
 
     return "[DNS] " + " ".join(parts)

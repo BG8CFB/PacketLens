@@ -16,5 +16,5 @@ AI_DEFAULTS = {
     "timeout": 120,
     "max_concurrency": 3,             # AI API 并发请求数上限
     "max_layer2_flows": 10,           # 深度分析 Layer 2 最多钻取的可疑流数
-    "packets_per_flow_layer1": 5,     # Layer 1 每条流采样的包数
+    "packets_per_flow_layer1": 2,     # Layer 1 每条流采样的包数
 }

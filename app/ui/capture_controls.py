@@ -19,7 +19,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from app.constants import DEFAULT_CAPTURE_DURATION
+from app.constants import DEFAULT_CAPTURE_DURATION, MAX_CAPTURE_DURATION, MIN_CAPTURE_DURATION
 from app.models.nic_info import NICInfo
 
 logger = logging.getLogger(__name__)
@@ -81,8 +81,10 @@ class CaptureControls(QWidget):
         layout.addWidget(duration_label)
 
         self._duration_combo = QComboBox()
-        self._duration_combo.addItems(["10秒", "30秒", "60秒", "120秒", "300秒"])
-        self._duration_combo.setCurrentIndex(2)  # 默认 60秒
+        self._duration_options = [10, 20, 30, 60, 120, 300]
+        self._duration_combo.addItems(f"{s}秒" for s in self._duration_options)
+        default_idx = self._find_duration_index(DEFAULT_CAPTURE_DURATION)
+        self._duration_combo.setCurrentIndex(default_idx)
         self._duration_combo.setMinimumWidth(80)
         layout.addWidget(self._duration_combo)
 
@@ -146,9 +148,16 @@ class CaptureControls(QWidget):
 
     def set_default_duration(self, seconds: int) -> None:
         """根据配置设置默认抓包时长"""
-        duration_map = {10: 0, 30: 1, 60: 2, 120: 3, 300: 4}
-        index = duration_map.get(seconds, 2)
+        index = self._find_duration_index(seconds)
         self._duration_combo.setCurrentIndex(index)
+
+    def _find_duration_index(self, seconds: int) -> int:
+        """查找秒数对应的下拉框索引，不匹配时选最接近的"""
+        if seconds in self._duration_options:
+            return self._duration_options.index(seconds)
+        # 找最接近的
+        closest = min(self._duration_options, key=lambda s: abs(s - seconds))
+        return self._duration_options.index(closest)
 
     def set_capturing(self, capturing: bool) -> None:
         """设置抓包状态"""

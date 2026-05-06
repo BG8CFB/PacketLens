@@ -27,6 +27,7 @@ from app.ai.component_factory import create_ai_engine, create_prompt_builder, cr
 from app.ai.prompt_builder import PromptBuilder
 from app.ai.result_parser import ResultParser
 from app.capture.capture_engine import CaptureEngine
+from app.constants import DEFAULT_CAPTURE_DURATION
 from app.capture.nic_detector import NpcapNotFoundError, list_interfaces
 from app.models.analysis_result import AnalysisResult
 from app.storage.config_manager import ConfigManager
@@ -97,7 +98,7 @@ class MainWindow(QMainWindow):
         self._controls.start_requested.connect(self._start_capture)
         self._controls.stop_requested.connect(self._stop_capture)
         self._controls.set_default_duration(
-            self._config.get("default_capture_duration", 60)
+            self._config.get("default_capture_duration", DEFAULT_CAPTURE_DURATION)
         )
         layout.addWidget(self._controls)
 
@@ -199,6 +200,9 @@ class MainWindow(QMainWindow):
             ai_cfg = self._config.get_ai_config()
             self._ai_engine = create_ai_engine(ai_cfg)
             self._prompt_builder = create_prompt_builder(ai_cfg)
+            self._controls.set_default_duration(
+                self._config.get("default_capture_duration", DEFAULT_CAPTURE_DURATION)
+            )
             self._status_bar.showMessage("配置已更新")
 
     def _init_nics(self) -> None:

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import ipaddress
+
 from app.constants import PROTOCOL_COLORS
 
 # 常见端口 → 服务名映射
@@ -65,3 +67,24 @@ def classify_service(src_port: int | None, dst_port: int | None, protocol: str) 
 def get_protocol_color(protocol: str) -> str:
     """获取协议对应颜色"""
     return PROTOCOL_COLORS.get(protocol, "#CCCCCC")
+
+
+# RFC 1918 + loopback + link-local
+_PRIVATE_NETWORKS = [
+    ipaddress.ip_network("10.0.0.0/8"),
+    ipaddress.ip_network("172.16.0.0/12"),
+    ipaddress.ip_network("192.168.0.0/16"),
+    ipaddress.ip_network("127.0.0.0/8"),
+    ipaddress.ip_network("169.254.0.0/16"),
+]
+
+
+def is_internal_ip(ip_str: str) -> bool:
+    """判断 IP 是否为内网地址（RFC 1918 + loopback + link-local）"""
+    if not ip_str:
+        return False
+    try:
+        addr = ipaddress.ip_address(ip_str)
+        return any(addr in net for net in _PRIVATE_NETWORKS)
+    except ValueError:
+        return False

@@ -14,7 +14,7 @@ from app.ai.prompts.system_prompt import get_system_prompt
 from app.ai.prompts.quick_analysis import get_layer1_template
 from app.ai.prompts.deep_analysis import get_layer2_template, get_layer3_template
 from app.config.ai_defaults import AI_DEFAULTS
-from app.preprocessing.protocol_classifier import classify_service
+from app.preprocessing.protocol_classifier import classify_service, is_internal_ip
 
 if TYPE_CHECKING:
     from app.models.flow_record import FlowRecord
@@ -64,6 +64,22 @@ _LAYER3_LAYER1_RATIO = 0.40   # Layer1 结果占输入上限的 40%
 _LAYER3_LAYER2_RATIO = 0.60   # Layer2 结果占输入上限的 60%
 
 
+# 异常告警 detail 字段展示优先级（越靠前越优先展示）
+_PRIORITY_DETAIL_KEYS = [
+    "ip", "src_ip", "target_ip", "source_ip",
+    "mac_count", "macs",
+    "port_count", "unique_ports", "ports_sample",
+    "global_retransmit_rate", "total_retransmits", "total_tcp_packets",
+    "flow_retransmit_rate", "retransmit_count",
+    "failure_rate", "failure_count", "response_count", "rcode_breakdown",
+    "max_pps", "median_pps", "spike_ratio", "rate_pps",
+    "rst_count", "zero_window_count",
+    "error_count", "total_errors", "by_type",
+    "overlap_count", "incomplete_count", "total_frag_packets",
+    "servfail_count",
+]
+
+
 class PromptBuilder:
     """构建 AI 分析提示词"""
 
@@ -103,6 +119,10 @@ class PromptBuilder:
         system = get_system_prompt()
 
         # 统计数据格式化
+        start_t = stats.get("capture_start_time", "")
+        end_t = stats.get("capture_end_time", "")
+        time_range = f"{start_t} ~ {end_t}" if start_t else "未知"
+
         proto_dist = stats.get("protocol_distribution", {})
         proto_lines = [f"  {k}: {v} 包" for k, v in proto_dist.items()]
 
@@ -114,7 +134,29 @@ class PromptBuilder:
         anomaly_lines = []
         if anomalies:
             for a in anomalies:
-                anomaly_lines.append(f"  [{a['severity']}] {a['description']}")
+                line = f"  [{a['severity']}] {a['description']}"
+                # 追加相关流 ID（前 5 个）
+                affected = a.get("affected_flows", [])
+                if affected:
+                    flow_sample = ", ".join(str(f) for f in affected[:5])
+                    if len(affected) > 5:
+                        flow_sample += f" ...({len(affected)} total)"
+                    line += f" [相关流: {flow_sample}]"
+                # 追加关键 detail 字段（按优先级排序，取前 5 个）
+                detail = a.get("detail", {})
+                if detail:
+                    sorted_items = sorted(
+                        detail.items(),
+                        key=lambda kv: (
+                            _PRIORITY_DETAIL_KEYS.index(kv[0])
+                            if kv[0] in _PRIORITY_DETAIL_KEYS
+                            else 999
+                        ),
+                    )
+                    detail_items = sorted_items[:5]
+                    detail_str = ", ".join(f"{k}={v}" for k, v in detail_items)
+                    line += f" ({detail_str})"
+                anomaly_lines.append(line)
         else:
             anomaly_lines.append("  未检测到明显异常")
 
@@ -180,6 +222,27 @@ class PromptBuilder:
         else:
             fragment_stats_str = "  无分片数据"
 
+        # 广播/组播/ARP 统计格式化
+        bc_mc_data = stats.get("broadcast_multicast", {})
+        bc_mc_parts = []
+        if bc_mc_data:
+            if bc_mc_data.get("broadcast_count", 0) > 0:
+                bc_mc_parts.append(
+                    f"广播: {bc_mc_data['broadcast_count']}包 ({bc_mc_data['broadcast_ratio']:.1%})"
+                )
+            if bc_mc_data.get("multicast_count", 0) > 0:
+                bc_mc_parts.append(
+                    f"组播: {bc_mc_data['multicast_count']}包 ({bc_mc_data['multicast_ratio']:.1%})"
+                )
+            arp_req = bc_mc_data.get("arp_request_count", 0)
+            arp_rep = bc_mc_data.get("arp_reply_count", 0)
+            if arp_req > 0 or arp_rep > 0:
+                bc_mc_parts.append(f"ARP请求: {arp_req}, 应答: {arp_rep}")
+        if bc_mc_parts:
+            broadcast_multicast_str = "  " + ", ".join(bc_mc_parts)
+        else:
+            broadcast_multicast_str = "  无广播/组播数据"
+
         # PPS 时间线格式化
         pps_data = stats.get("pps_timeline", {})
         if pps_data and pps_data.get("max_pps", 0) > 0:
@@ -191,10 +254,20 @@ class PromptBuilder:
         else:
             pps_timeline_str = "  无 PPS 数据"
 
-        # 每条流 + 采样包
+        # 异常流 ID 集合（用于自适应采样）
+        anomalous_flow_ids: set[str] = set()
+        for a in anomalies:
+            for fid in a.get("affected_flows", []):
+                anomalous_flow_ids.add(fid)
+
+        # 每条流 + 采样包（异常流提高采样数）
         flow_sections = []
         for flow in flows:
-            section = _format_flow_with_packets(flow, packets, self._packets_per_flow_layer1)
+            if flow.flow_id in anomalous_flow_ids:
+                sample_count = min(self._packets_per_flow_layer1 * 3, 20)
+            else:
+                sample_count = self._packets_per_flow_layer1
+            section = _format_flow_with_packets(flow, packets, sample_count)
             flow_sections.append(section)
 
         user_prompt = get_layer1_template().format(
@@ -202,6 +275,7 @@ class PromptBuilder:
             total_bytes=stats.get("total_bytes", 0),
             total_flows=stats.get("total_flows", 0),
             duration=stats.get("duration", 0),
+            time_range=time_range,
             bandwidth_bps=stats.get("bandwidth_bps", 0),
             avg_packet_size=stats.get("avg_packet_size", 0),
             avg_flow_size=stats.get("avg_flow_size", 0),
@@ -216,6 +290,7 @@ class PromptBuilder:
             icmp_errors=icmp_errors_str,
             ttl_distribution=ttl_distribution_str,
             fragment_stats=fragment_stats_str,
+            broadcast_multicast=broadcast_multicast_str,
             pps_timeline=pps_timeline_str,
             all_flows_with_packets="\n".join(flow_sections),
         )
@@ -248,13 +323,9 @@ class PromptBuilder:
         system = get_system_prompt()
 
         relevant_packets = _select_relevant_packets(packets, flow, max_packets=50)
+        base_ts = flow.first_seen if flow.first_seen > 0 else 0.0
 
-        pkt_lines = []
-        for p in relevant_packets:
-            pkt_lines.append(
-                f"  #{p.index} {p.src_ip}:{p.src_port} -> {p.dst_ip}:{p.dst_port} "
-                f"[{p.protocol}] len={p.length} {p.info}"
-            )
+        pkt_lines = [_format_packet_line(p, base_ts) for p in relevant_packets]
 
         user_prompt = get_layer2_template().format(
             flow_id=flow.flow_id,
@@ -306,6 +377,68 @@ class PromptBuilder:
 
 # ── 格式化工具函数 ──
 
+# 无端口协议（ARP/ICMP 等不使用端口号的协议）
+_NO_PORT_PROTOCOLS = frozenset({"ARP", "ICMP"})
+
+
+def _format_endpoint(ip: str, port: int | None, protocol: str) -> str:
+    """格式化端点地址，无端口协议不输出端口号"""
+    if protocol in _NO_PORT_PROTOCOLS or port is None:
+        return ip
+    return f"{ip}:{port}"
+
+
+def _format_packet_line(p: PacketRecord, base_ts: float) -> str:
+    """格式化单个包行为可读行"""
+    rel_ts = f"+{p.timestamp - base_ts:.3f}s " if base_ts > 0 else ""
+
+    src = _format_endpoint(p.src_ip, p.src_port, p.protocol)
+    dst = _format_endpoint(p.dst_ip, p.dst_port, p.protocol)
+
+    line = f"  #{p.index} {rel_ts}{src} -> {dst} [{p.protocol}] len={p.length} {p.info}"
+
+    # TTL 始终展示（让 AI 能从包级别发现 TTL 异常）
+    extras = []
+    if p.ttl is not None:
+        extras.append(f"TTL={p.ttl}")
+    # TCP 零窗口高亮
+    if p.protocol == "TCP" and p.tcp_window == 0:
+        extras.append("Win=0!")
+    if extras:
+        line += " " + " ".join(extras)
+
+    return line
+
+
+def _format_flow_header(flow: FlowRecord, svc_tag: str, dir_tag: str) -> str:
+    """格式化流摘要 header 行"""
+    src = _format_endpoint(flow.src_ip, flow.src_port, flow.protocol)
+    dst = _format_endpoint(flow.dst_ip, flow.dst_port, flow.protocol)
+
+    header = (
+        f"### 流 [{flow.flow_id}] {src} -> {dst} ({flow.protocol}) "
+        f"{flow.packet_count}包 {flow.byte_count}B dur={flow.duration:.2f}s "
+        f"flags={','.join(sorted(flow.flags_set)) or '-'}{svc_tag}{dir_tag}"
+    )
+
+    # 流速率信息（duration > 0 时展示）
+    if flow.duration > 0:
+        header += f" avg={flow.bps / 1024:.1f}Kbps {flow.pps:.1f}pps"
+
+    # TCP 流附带健康指标
+    if flow.protocol == "TCP" and (
+        flow.retransmit_count or flow.zero_window_count
+        or flow.rst_count or flow.dup_ack_count
+    ):
+        header += (
+            f"\n  TCP健康: 重传={flow.retransmit_count} "
+            f"零窗口={flow.zero_window_count} "
+            f"RST={flow.rst_count} 重复ACK={flow.dup_ack_count}"
+        )
+
+    return header
+
+
 def _format_flow_with_packets(
     flow: FlowRecord,
     packets: list[PacketRecord],
@@ -315,24 +448,25 @@ def _format_flow_with_packets(
     svc = flow.service or classify_service(flow.src_port, flow.dst_port, flow.protocol)
     svc_tag = f" [{svc}]" if svc else ""
 
-    # 流摘要行（flags_set 排序保证输出一致性）
-    header = (
-        f"### 流 [{flow.flow_id}] {flow.src_ip}:{flow.src_port} -> "
-        f"{flow.dst_ip}:{flow.dst_port} ({flow.protocol}) "
-        f"{flow.packet_count}包 {flow.byte_count}B dur={flow.duration:.2f}s "
-        f"flags={','.join(sorted(flow.flags_set)) or '-'}{svc_tag}"
-    )
+    # 内外网方向标签
+    src_in = is_internal_ip(flow.src_ip)
+    dst_in = is_internal_ip(flow.dst_ip)
+    if src_in and not dst_in:
+        dir_tag = " [内→外]"
+    elif not src_in and dst_in:
+        dir_tag = " [外→内]"
+    elif src_in and dst_in:
+        dir_tag = " [内→内]"
+    else:
+        dir_tag = " [外→外]"
+
+    header = _format_flow_header(flow, svc_tag, dir_tag)
 
     # 选择属于该流的包
     flow_pkts = _select_relevant_packets(packets, flow, max_packets=max_packets)
+    base_ts = flow.first_seen if flow.first_seen > 0 else 0.0
 
-    pkt_lines = []
-    for p in flow_pkts:
-        pkt_lines.append(
-            f"  #{p.index} {p.src_ip}:{p.src_port} -> {p.dst_ip}:{p.dst_port} "
-            f"[{p.protocol}] len={p.length} {p.info}"
-        )
-
+    pkt_lines = [_format_packet_line(p, base_ts) for p in flow_pkts]
     pkt_section = "\n".join(pkt_lines)
     if not pkt_section:
         pkt_section = "  （无可用包数据）"

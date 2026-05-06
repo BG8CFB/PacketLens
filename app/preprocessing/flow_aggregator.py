@@ -67,9 +67,13 @@ class FlowAggregator:
                                 f"丢弃过期流 {flow.flow_id}。后续丢弃将静默进行。"
                             )
                             self._drop_warned = True
-                    self._flows[flow_key] = self._create_flow(flow_key, packet)
+                    new_flow = self._create_flow(flow_key, packet)
+                    self._flows[flow_key] = new_flow
                     # 清理已归档流的 TCP seq 状态
                     self._tcp_seq_state.pop(flow_key, None)
+                    # 超时重建流的首包也需追踪 TCP 健康度
+                    if packet.protocol == "TCP" and packet.tcp_seq is not None:
+                        self._track_tcp_health(flow_key, packet, new_flow)
                     return
 
                 flow.packet_count += 1
@@ -83,7 +87,11 @@ class FlowAggregator:
                 if packet.protocol == "TCP" and packet.tcp_seq is not None:
                     self._track_tcp_health(flow_key, packet, flow)
             else:
-                self._flows[flow_key] = self._create_flow(flow_key, packet)
+                flow = self._create_flow(flow_key, packet)
+                self._flows[flow_key] = flow
+                # 首包也需追踪 TCP 健康度（初始化方向序列号）
+                if packet.protocol == "TCP" and packet.tcp_seq is not None:
+                    self._track_tcp_health(flow_key, packet, flow)
 
     def _create_flow(self, flow_key: str, packet: PacketRecord) -> FlowRecord:
         """创建新流记录"""
@@ -166,8 +174,11 @@ class FlowAggregator:
     def _track_tcp_health(self, flow_key: str, packet: PacketRecord, flow: FlowRecord) -> None:
         """追踪 TCP 健康度指标（重传/零窗口/RST/重复ACK）
 
-        TCP 序列号回绕处理：使用 32 位有符号差值判断方向，
-        diff > 0 表示 seq 在前进，diff < 0 表示 seq 回退（重传或乱序）。
+        TCP 序列号是方向相关的：连接的每一端维护独立的序列号空间。
+        本方法在双向流内部分别追踪正向/反向的序列号，避免跨方向误判。
+
+        重传检测：使用 32 位有符号差值判断方向，
+        diff > 0 表示 seq 在前进，diff > 0x80000000 表示 seq 回退（重传或乱序）。
         """
         # RST 检测（不 return，继续检测零窗口）
         if packet.flags and "R" in packet.flags:
@@ -183,31 +194,54 @@ class FlowAggregator:
 
         state = self._tcp_seq_state.get(flow_key)
         if state is None:
-            state = {"max_seq": 0, "ack_counts": {}}
+            state = {
+                "fwd_max_seq": None,
+                "rev_max_seq": None,
+                "fwd_ack_counts": {},
+                "rev_ack_counts": {},
+            }
             self._tcp_seq_state[flow_key] = state
+
+        # 判断包方向：与 flow 记录的 src/dst 一致为 forward，否则为 reverse
+        is_forward = (
+            packet.src_ip == flow.src_ip
+            and packet.src_port == flow.src_port
+            and packet.dst_ip == flow.dst_ip
+            and packet.dst_port == flow.dst_port
+        )
 
         seq = packet.tcp_seq
         has_payload = packet.length > self._get_min_frame_size("TCP")
 
-        # 重传检测：处理 32 位序列号回绕
-        diff = (seq - state["max_seq"]) & 0xFFFFFFFF
-        if diff > 0x80000000:
-            # seq 回退 → 重传或乱序（排除纯 ACK）
-            if has_payload:
-                flow.retransmit_count += 1
-        elif diff > 0:
-            state["max_seq"] = seq
+        # 选择对应方向的 max_seq
+        max_seq_key = "fwd_max_seq" if is_forward else "rev_max_seq"
+        current_max = state[max_seq_key]
 
-        # 重复 ACK 检测：同一 ack 值出现 3+ 次
+        if current_max is None:
+            # 该方向的第一个包，初始化 max_seq
+            state[max_seq_key] = seq
+        else:
+            # 重传检测：处理 32 位序列号回绕
+            diff = (seq - current_max) & 0xFFFFFFFF
+            if diff > 0x80000000:
+                # seq 回退 → 重传或乱序（排除纯 ACK）
+                if has_payload:
+                    flow.retransmit_count += 1
+            elif diff > 0:
+                state[max_seq_key] = seq
+
+        # 重复 ACK 检测：同一方向同一 ack 值出现 3+ 次
         if packet.tcp_ack is not None:
+            ack_counts_key = "fwd_ack_counts" if is_forward else "rev_ack_counts"
+            counts = state[ack_counts_key]
             ack_key = packet.tcp_ack
-            count = state["ack_counts"].get(ack_key, 0) + 1
-            state["ack_counts"][ack_key] = count
+            count = counts.get(ack_key, 0) + 1
+            counts[ack_key] = count
             if count == 3:
                 flow.dup_ack_count += 1
-            if len(state["ack_counts"]) > 50:
-                oldest = list(state["ack_counts"].keys())[0]
-                del state["ack_counts"][oldest]
+            if len(counts) > 50:
+                oldest = list(counts.keys())[0]
+                del counts[oldest]
 
     @staticmethod
     def _get_min_frame_size(protocol: str) -> int:

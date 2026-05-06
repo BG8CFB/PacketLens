@@ -387,6 +387,28 @@ class CaptureEngine:
             "alert_types": [a["type"] for a in fault_alerts],
         }
 
+        # 广播/组播/ARP 统计（从 StormCounter 注入）
+        total = stats.get("total_packets", 0)
+        if total > 0:
+            stats["broadcast_multicast"] = {
+                "broadcast_count": self._storm_counter.broadcast_count,
+                "broadcast_ratio": round(self._storm_counter.broadcast_count / total, 4),
+                "multicast_count": self._storm_counter.multicast_count,
+                "multicast_ratio": round(self._storm_counter.multicast_count / total, 4),
+                "arp_request_count": self._storm_counter.arp_request,
+                "arp_reply_count": self._storm_counter.arp_reply,
+            }
+
+        # 抓包时间范围（本地时区，用户直觉友好）
+        if self._running_first_ts:
+            stats["capture_start_time"] = datetime.fromtimestamp(
+                self._running_first_ts
+            ).strftime("%H:%M:%S")
+        if self._running_last_ts:
+            stats["capture_end_time"] = datetime.fromtimestamp(
+                self._running_last_ts
+            ).strftime("%H:%M:%S")
+
         # 局部计算完成后整体赋值，缩短工作线程持有"半成品状态"的窗口
         self._flows = flows
         self._stats = stats

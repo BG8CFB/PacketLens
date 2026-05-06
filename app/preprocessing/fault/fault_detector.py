@@ -58,7 +58,7 @@ class FaultDetector:
     ) -> list[dict]:
         """运行所有故障检测，返回 anomaly 格式字典列表"""
         alerts: list[FaultAlert] = []
-        alerts.extend(self._detect_arp_spoof(packets))
+        alerts.extend(self._detect_arp_spoof(fault_counter))
         alerts.extend(self._detect_tcp_retransmit(fault_counter, flows))
         alerts.extend(self._detect_tcp_zero_window(fault_counter, flows))
         alerts.extend(self._detect_rst_storm(fault_counter, duration))
@@ -75,23 +75,13 @@ class FaultDetector:
 
     # ── 1. ARP 欺骗检测 ──────────────────────────────────
 
-    def _detect_arp_spoof(self, packets: list[PacketRecord]) -> list[FaultAlert]:
+    def _detect_arp_spoof(self, fault_counter: FaultCounter) -> list[FaultAlert]:
         """检测 ARP 欺骗：同 IP 出现多个不同 MAC（使用 FaultCounter 增量追踪数据）"""
         alerts: list[FaultAlert] = []
 
-        # 使用 packets 参数兼容无 FaultCounter 的调用路径
-        ip_mac_map: dict[str, set[str]] = defaultdict(set)
-        ip_packet_count: dict[str, int] = defaultdict(int)
-        for pkt in packets:
-            if pkt.protocol != "ARP" or pkt.arp_op != 2:
-                continue
-            if not pkt.src_mac or not pkt.src_ip:
-                continue
-            ip_mac_map[pkt.src_ip].add(pkt.src_mac.lower())
-            ip_packet_count[pkt.src_ip] += 1
-
-        for ip, macs in ip_mac_map.items():
-            if ip_packet_count[ip] < ARP_SPOOF_MIN_PACKETS:
+        for ip, macs in fault_counter.arp_ip_mac_map.items():
+            pkt_count = fault_counter.arp_ip_packet_count.get(ip, 0)
+            if pkt_count < ARP_SPOOF_MIN_PACKETS:
                 continue
             if len(macs) < ARP_SPOOF_CONFLICT_THRESHOLD:
                 continue
@@ -110,7 +100,7 @@ class FaultDetector:
                     "ip": ip,
                     "mac_count": len(macs),
                     "macs": sorted(macs),
-                    "arp_reply_count": ip_packet_count[ip],
+                    "arp_reply_count": pkt_count,
                 },
             ))
         return alerts

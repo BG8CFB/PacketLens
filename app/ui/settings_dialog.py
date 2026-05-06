@@ -33,6 +33,7 @@ from PySide6.QtWidgets import (
 
 from app.ai.component_factory import test_connection
 from app.config.ai_defaults import AI_DEFAULTS
+from app.constants import DEFAULT_CAPTURE_DURATION, MAX_CAPTURE_DURATION, MIN_CAPTURE_DURATION
 from app.storage.config_manager import ConfigManager
 
 
@@ -362,7 +363,7 @@ class SettingsDialog(QDialog):
         form.setVerticalSpacing(10)
 
         self._duration_spin = QSpinBox()
-        self._duration_spin.setRange(10, 300)
+        self._duration_spin.setRange(MIN_CAPTURE_DURATION, MAX_CAPTURE_DURATION)
         self._duration_spin.setSuffix(" 秒")
         form.addRow("默认抓包时长:", self._duration_spin)
 
@@ -533,7 +534,7 @@ class SettingsDialog(QDialog):
         p["provider_type"] = self._type_combo.currentData()
 
     def _load_capture_values(self) -> None:
-        self._duration_spin.setValue(self._config.get("default_capture_duration", 60))
+        self._duration_spin.setValue(self._config.get("default_capture_duration", DEFAULT_CAPTURE_DURATION))
         self._auto_analyze_cb.setChecked(self._config.get("auto_analyze", True))
         self._auto_save_cb.setChecked(self._config.get("auto_save_pcap", True))
 
