@@ -122,7 +122,45 @@ app/
 - **Conda 环境**: `packetlens`（Python 3.11+）
 - **依赖**: PySide6>=6.6, scapy>=2.5, langchain-openai>=0.3.0, langchain-anthropic>=0.3.0, openai>=1.12, python-dotenv>=1.0
 - **测试**: pytest>=8.0, pytest-qt>=4.4
-- **打包**: Nuitka --onefile（待实施，编译指令在 main.py 头部注释）
+- **打包**: Nuitka 4.x standalone（构建脚本 `build.py`）
+
+## Nuitka 打包
+
+```bash
+conda activate packetlens
+python build.py                        # 编译为 dist/PacketLens.exe
+```
+
+输出：`dist/` 目录（standalone 模式，含 exe + 依赖 DLL + 数据文件），总大小约 252 MB。
+
+**运行要求**：目标机器需安装 Npcap，exe 需以管理员身份运行，`.env` 放在同目录下。
+
+### 已知的 Nuitka 编译运行时问题
+
+`main.py` 中已有对应的 monkey-patch，以下问题已修复但需注意不要在重构时丢失：
+
+#### 1. `inspect.getfile` 返回 dict（非 str）
+
+- **原因**：Nuitka 编译后部分模块的 `__file__` 属性变为 dict，导致 `inspect.getfile()` 返回 dict。shibokensupport 通过 `inspect.getsource` → `findsource` → `getsourcefile` → `getfile` 链路触发 `.endswith()` / `.startswith()` 调用崩溃。
+- **修复**：在所有模块导入前 monkey-patch `inspect.getfile`，检查返回值类型，非 str 则抛 `TypeError`。
+- **触发路径**：`langchain_core.caches` → `shibokensupport.signature.loader` → `inspect.getsource`
+
+#### 2. SSL 证书找不到（FileNotFoundError）
+
+- **原因**：conda-forge 的 OpenSSL 在 standalone 构建中找不到系统 CA 证书路径。`ssl.create_default_context()` 内部调用 `load_default_certs` 尝试加载不存在的证书文件。
+- **修复**：monkey-patch `ssl.create_default_context` 和 `ssl._create_default_https_context`，完全绕过原函数，手动创建 `SSLContext` + `load_verify_locations(certifi/cacert.pem)`。
+- **注意**：仅设置 `SSL_CERT_FILE` 环境变量无效，conda-forge OpenSSL 不读取该变量。
+
+#### 3. 目录定位（base_dir）
+
+- **原因**：Nuitka 编译后 `__file__` 仍指向源码路径（如 `D:\Code\zhuabao\main.py`），而非 exe 所在的 dist 目录。`sys.frozen` 和 `sys._nuitka_version` 均不可靠。
+- **修复**：优先用 `sys.executable` 所在目录，检测 `certifi/cacert.pem` 是否存在来确认是 Nuitka standalone 环境。
+
+#### 4. scapy.layers.dot11 编译警告（非致命）
+
+- **现象**：`NameError: cannot access free variable '__class__'`
+- **原因**：scapy 的 metaclass `register_variant` 使用了 Nuitka 无法正确编译的闭包变量。
+- **影响**：仅 WiFi 802.11 层协议加载失败，不影响以太网/IP/TCP/UDP 抓包功能。
 
 ## .env 配置
 

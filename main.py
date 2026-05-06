@@ -37,24 +37,25 @@ def _show_error_dialog(title: str, message: str) -> None:
 
 
 def main():
-    # Nuitka standalone 模式下 __file__ 不可靠，用多种方式定位 exe 所在目录
-    if getattr(sys, "frozen", False) or hasattr(sys, "_nuitka_version"):
-        base_dir = Path(sys.executable).resolve().parent
-    else:
-        base_dir = Path(__file__).resolve().parent
+    # Nuitka standalone: sys.executable = PacketLens.exe, __file__ = 源码路径
+    # 源码模式: sys.executable = python.exe, __file__ = 当前目录
+    exe_dir = Path(sys.executable).resolve().parent
+    source_dir = Path(__file__).resolve().parent
+    # 优先用 exe 目录（如果 certifi 存在说明是 Nuitka standalone）
+    base_dir = exe_dir if (exe_dir / "certifi" / "cacert.pem").exists() else source_dir
 
     # Nuitka standalone 构建中 conda-forge OpenSSL 找不到 CA 证书，
-    # 必须直接 patch ssl.create_default_context 注入 certifi 的 cafile
+    # 必须完全绕过 ssl.create_default_context，手动构建 SSL 上下文
     certifi_cert = str(base_dir / "certifi" / "cacert.pem")
     if os.path.isfile(certifi_cert):
         import ssl
 
-        _orig_create_ctx = ssl.create_default_context
-
         def _patched_create_ctx(purpose=ssl.Purpose.SERVER_AUTH, **kw):
-            if "cafile" not in kw:
-                kw["cafile"] = certifi_cert
-            return _orig_create_ctx(purpose=purpose, **kw)
+            ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+            ctx.verify_mode = ssl.CERT_REQUIRED
+            ctx.check_hostname = True
+            ctx.load_verify_locations(certifi_cert)
+            return ctx
 
         ssl.create_default_context = _patched_create_ctx
         ssl._create_default_https_context = _patched_create_ctx
