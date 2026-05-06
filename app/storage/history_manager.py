@@ -65,6 +65,7 @@ class HistoryManager:
         self._conn.row_factory = sqlite3.Row
         # 启用 WAL 模式：提高并发读写性能，避免读写互斥
         self._conn.execute("PRAGMA journal_mode=WAL")
+        self._conn.execute("PRAGMA busy_timeout=5000")
         self._conn.execute(SCHEMA)
         self._conn.commit()
         self._closed = False

@@ -125,12 +125,12 @@ class FaultCounter:
                 for _ in range(bucket_advance):
                     self._bucket_idx = (self._bucket_idx + 1) % 60
                     self.pps_buckets[self._bucket_idx] = 0
-            self._current_bucket_ts = ts
+            self._current_bucket_ts += bucket_advance
 
         self.pps_buckets[self._bucket_idx] += 1
 
     def _track_fragment(self, pkt: PacketRecord) -> None:
-        """追踪分片状态，检测重叠/不完整"""
+        """追踪分片状态，检测区间重叠/不完整"""
         ip_id = 0
         if pkt.raw_bytes and len(pkt.raw_bytes) >= 20:
             ip_id = (pkt.raw_bytes[18] << 8) | pkt.raw_bytes[19]
@@ -138,13 +138,22 @@ class FaultCounter:
 
         state = self._frag_sets.get(key)
         if state is None:
-            state = {"offsets": set(), "has_last": False}
+            state = {"ranges": [], "has_last": False}
             self._frag_sets[key] = state
 
-        offset = pkt.ip_frag
-        if offset in state["offsets"]:
-            self.frag_overlaps += 1
-        state["offsets"].add(offset)
+        offset = pkt.ip_frag * 8  # 转为字节偏移
+        frag_len = 0
+        if pkt.raw_bytes and len(pkt.raw_bytes) >= 20:
+            total_len = (pkt.raw_bytes[2] << 8) | pkt.raw_bytes[3]
+            hdr_len = (pkt.raw_bytes[0] & 0x0F) * 4
+            frag_len = max(0, total_len - hdr_len)
+        end = offset + frag_len
+
+        for (s, e) in state["ranges"]:
+            if offset < e and end > s:
+                self.frag_overlaps += 1
+                break
+        state["ranges"].append((offset, end))
 
         if not pkt.ip_flags_mf:
             state["has_last"] = True
@@ -163,15 +172,18 @@ class FaultCounter:
             del self._frag_sets[key]
 
     def get_pps_stats(self) -> dict:
-        """返回 PPS 统计摘要（median 基于全部桶，包含零值桶）"""
+        """返回 PPS 统计摘要（median 仅基于已使用桶）"""
         max_pps = max(self.pps_buckets) if self.pps_buckets else 0
-        sorted_all = sorted(self.pps_buckets)
-        n = len(sorted_all)
+        used = [b for b in self.pps_buckets if b > 0]
+        if not used:
+            return {"max_pps": max_pps, "median_pps": 0.0, "spike_ratio": 0.0}
+        sorted_used = sorted(used)
+        n = len(sorted_used)
         mid = n // 2
         if n % 2 == 0:
-            median_pps = (sorted_all[mid - 1] + sorted_all[mid]) / 2.0
+            median_pps = (sorted_used[mid - 1] + sorted_used[mid]) / 2.0
         else:
-            median_pps = float(sorted_all[mid])
+            median_pps = float(sorted_used[mid])
         spike_ratio = max_pps / median_pps if median_pps > 0 else 0.0
         return {
             "max_pps": max_pps,

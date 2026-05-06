@@ -27,6 +27,7 @@ class FlowRecord:
     zero_window_count: int = 0
     rst_count: int = 0
     dup_ack_count: int = 0
+    ooo_count: int = 0  # 乱序到达（区别于重传）
 
     @property
     def duration(self) -> float:
@@ -70,6 +71,7 @@ class FlowRecord:
             "zero_window_count": self.zero_window_count,
             "rst_count": self.rst_count,
             "dup_ack_count": self.dup_ack_count,
+            "ooo_count": self.ooo_count,
         }
 
     @classmethod
@@ -94,4 +96,5 @@ class FlowRecord:
             zero_window_count=data.get("zero_window_count", 0),
             rst_count=data.get("rst_count", 0),
             dup_ack_count=data.get("dup_ack_count", 0),
+            ooo_count=data.get("ooo_count", 0),
         )

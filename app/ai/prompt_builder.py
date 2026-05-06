@@ -261,13 +261,14 @@ class PromptBuilder:
                 anomalous_flow_ids.add(fid)
 
         # 每条流 + 采样包（异常流提高采样数）
+        pkt_index = _build_packet_flow_index(packets)
         flow_sections = []
         for flow in flows:
             if flow.flow_id in anomalous_flow_ids:
                 sample_count = min(self._packets_per_flow_layer1 * 3, 20)
             else:
                 sample_count = self._packets_per_flow_layer1
-            section = _format_flow_with_packets(flow, packets, sample_count)
+            section = _format_flow_with_packets(flow, packets, sample_count, _index=pkt_index)
             flow_sections.append(section)
 
         user_prompt = get_layer1_template().format(
@@ -295,12 +296,15 @@ class PromptBuilder:
             all_flows_with_packets="\n".join(flow_sections),
         )
 
-        # 输入长度安全检查
+        # 输入长度安全检查 + 截断保护
         prompt_len = len(user_prompt) + len(system)
         if prompt_len > self._max_input_chars:
+            budget = self._max_input_chars - len(system)
+            if budget > 1000:
+                user_prompt = _smart_truncate_text(user_prompt, budget)
             logger.warning(
-                f"Layer1 prompt 长度 {prompt_len} 超过安全上限 "
-                f"{self._max_input_chars}，可能触发 API 限制"
+                f"Layer1 prompt 截断: {prompt_len} -> "
+                f"{len(user_prompt) + len(system)} (budget {self._max_input_chars})"
             )
 
         logger.info(
@@ -443,6 +447,7 @@ def _format_flow_with_packets(
     flow: FlowRecord,
     packets: list[PacketRecord],
     max_packets: int,
+    _index: dict[tuple, list[PacketRecord]] | None = None,
 ) -> str:
     """格式化单条流记录 + 采样包"""
     svc = flow.service or classify_service(flow.src_port, flow.dst_port, flow.protocol)
@@ -463,7 +468,7 @@ def _format_flow_with_packets(
     header = _format_flow_header(flow, svc_tag, dir_tag)
 
     # 选择属于该流的包
-    flow_pkts = _select_relevant_packets(packets, flow, max_packets=max_packets)
+    flow_pkts = _select_relevant_packets(packets, flow, max_packets=max_packets, _index=_index)
     base_ts = flow.first_seen if flow.first_seen > 0 else 0.0
 
     pkt_lines = [_format_packet_line(p, base_ts) for p in flow_pkts]
@@ -478,15 +483,24 @@ def _select_relevant_packets(
     packets: list[PacketRecord],
     flow: FlowRecord,
     max_packets: int = 5,
+    _index: dict[tuple, list[PacketRecord]] | None = None,
 ) -> list[PacketRecord]:
     """选择属于指定流的关键包
 
     采样策略：前2（握手/请求）+ 中间均匀采样 + 后2（结束/异常）
     """
-    flow_pkts = [
-        p for p in packets
-        if _packet_matches_flow(p, flow)
-    ]
+    if _index is not None:
+        f_sp = flow.src_port
+        f_dp = flow.dst_port
+        fwd = (flow.src_ip, f_sp, flow.dst_ip, f_dp)
+        rev = (flow.dst_ip, f_dp, flow.src_ip, f_sp)
+        key = (min(fwd, rev), max(fwd, rev), flow.protocol)
+        flow_pkts = _index.get(key, [])
+    else:
+        flow_pkts = [
+            p for p in packets
+            if _packet_matches_flow(p, flow)
+        ]
 
     if len(flow_pkts) <= max_packets:
         return flow_pkts
@@ -532,3 +546,20 @@ def _packet_matches_flow(pkt: PacketRecord, flow: FlowRecord) -> bool:
         (pkt.src_ip == flow.dst_ip and pkt.dst_ip == flow.src_ip
          and p_sp == flow.dst_port and p_dp == flow.src_port)
     )
+
+
+def _build_packet_flow_index(
+    packets: list[PacketRecord],
+) -> dict[tuple, list[PacketRecord]]:
+    """构建 flow_key -> [packets] 索引，将 O(N*M) 降至 O(M + N*k)"""
+    index: dict[tuple, list[PacketRecord]] = {}
+    for p in packets:
+        p_sp = p.src_port or 0
+        p_dp = p.dst_port or 0
+        fwd = (p.src_ip, p_sp, p.dst_ip, p_dp)
+        rev = (p.dst_ip, p_dp, p.src_ip, p_sp)
+        key = (min(fwd, rev), max(fwd, rev), p.protocol)
+        if key not in index:
+            index[key] = []
+        index[key].append(p)
+    return index

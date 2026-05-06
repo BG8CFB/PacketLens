@@ -62,12 +62,14 @@ class PCAPWriter(threading.Thread):
             logger.info(f"PCAP 写入完成: {self._total_written} 个包")
 
         except Exception as e:
-            self._error = str(e)
+            with self._lock:
+                self._error = str(e)
             logger.error(f"PCAP 写入错误: {e}")
 
     @property
     def error(self) -> str | None:
-        return self._error
+        with self._lock:
+            return self._error
 
     def stop(self, timeout: float = 10.0) -> None:
         """停止写入线程"""

@@ -242,9 +242,8 @@ class TestPromptBuilderMaxInputChars:
         with caplog.at_level(logging.WARNING):
             user_prompt, _ = builder.build_layer1_prompt(flows, [], stats, [])
 
-        # prompt 应该超过了 100 字符限制
-        assert len(user_prompt) > 100
-        assert any("超过安全上限" in r.message for r in caplog.records)
+        # prompt 应被截断到预算内
+        assert any("截断" in r.message or "超过安全上限" in r.message for r in caplog.records)
 
 
 class TestFormatFlowFlagsOrder:

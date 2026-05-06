@@ -172,10 +172,12 @@ class AIEngine:
         if last_chunk is not None:
             self._extract_usage(last_chunk)
         if not self._last_usage:
+            est_prompt = max(1, prompt_chars // 4)
+            est_completion = max(1, len(result) // 4)
             self._last_usage = {
-                "prompt_tokens": 0,
-                "completion_tokens": 0,
-                "total_tokens": 0,
+                "prompt_tokens": est_prompt,
+                "completion_tokens": est_completion,
+                "total_tokens": est_prompt + est_completion,
                 "estimated": True,
                 "prompt_chars": prompt_chars,
                 "response_chars": len(result),

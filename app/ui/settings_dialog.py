@@ -532,6 +532,10 @@ class SettingsDialog(QDialog):
         p["timeout"] = self._timeout_spin.value()
         p["max_concurrency"] = self._concurrency_spin.value()
         p["provider_type"] = self._type_combo.currentData()
+        # 保留无 UI 控件的 schema 字段
+        for key in ("max_input_chars", "max_layer2_flows", "packets_per_flow_layer1"):
+            if key not in p:
+                p[key] = AI_DEFAULTS[key]
 
     def _load_capture_values(self) -> None:
         self._duration_spin.setValue(self._config.get("default_capture_duration", DEFAULT_CAPTURE_DURATION))
@@ -591,13 +595,14 @@ class SettingsDialog(QDialog):
             "api_base": "",
             "api_key": "",
             "model": "",
-            "context_window_tokens": AI_DEFAULTS["context_window_tokens"],
-            "max_tokens": AI_DEFAULTS["max_tokens"],
-            "temperature": AI_DEFAULTS["temperature"],
-            "timeout": AI_DEFAULTS["timeout"],
-            "max_concurrency": AI_DEFAULTS["max_concurrency"],
             "is_default": False,
         }
+        for key in (
+            "context_window_tokens", "max_tokens", "max_input_chars",
+            "temperature", "timeout", "max_concurrency",
+            "max_layer2_flows", "packets_per_flow_layer1",
+        ):
+            new_provider[key] = AI_DEFAULTS[key]
         self._providers.append(new_provider)
         self._refresh_provider_combo()
         self._provider_combo.setCurrentIndex(len(self._providers) - 1)

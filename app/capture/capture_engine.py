@@ -94,10 +94,11 @@ class CaptureEngine:
         self._running_first_ts: float | None = None
         self._running_last_ts: float | None = None
 
-        # 预处理结果
+        # 预处理结果（跨线程读写，需要锁保护）
         self._flows = []
         self._stats: dict = {}
         self._anomalies: list[dict] = []
+        self._preprocess_lock = threading.Lock()
 
         # 异步预处理
         self._preprocess_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="preprocess")
@@ -131,15 +132,18 @@ class CaptureEngine:
 
     @property
     def flows(self) -> list:
-        return self._flows
+        with self._preprocess_lock:
+            return self._flows
 
     @property
     def stats(self) -> dict:
-        return self._stats
+        with self._preprocess_lock:
+            return self._stats
 
     @property
     def anomalies(self) -> list[dict]:
-        return self._anomalies
+        with self._preprocess_lock:
+            return self._anomalies
 
     def start_capture(
         self,
@@ -179,11 +183,17 @@ class CaptureEngine:
         pcap_dir = get_captures_dir()
         self._pcap_path = str(pcap_dir / f"capture_{timestamp}.pcap")
 
-        # 清空队列
-        while not self._capture_queue.empty():
-            self._capture_queue.get_nowait()
-        while not self._pcap_queue.empty():
-            self._pcap_queue.get_nowait()
+        # 清空队列（try/except 避免 TOCTOU 竞争）
+        while True:
+            try:
+                self._capture_queue.get_nowait()
+            except queue.Empty:
+                break
+        while True:
+            try:
+                self._pcap_queue.get_nowait()
+            except queue.Empty:
+                break
 
         # 启动 PCAP 写入线程
         self._pcap_writer = PCAPWriter(self._pcap_path, self._pcap_queue)
@@ -409,10 +419,11 @@ class CaptureEngine:
                 self._running_last_ts
             ).strftime("%H:%M:%S")
 
-        # 局部计算完成后整体赋值，缩短工作线程持有"半成品状态"的窗口
-        self._flows = flows
-        self._stats = stats
-        self._anomalies = anomalies
+        # 局部计算完成后整体赋值（锁保护，防止主线程读到半成品状态）
+        with self._preprocess_lock:
+            self._flows = flows
+            self._stats = stats
+            self._anomalies = anomalies
 
         logger.info(
             f"预处理完成: {len(flows)} 条流, "
@@ -437,4 +448,8 @@ class CaptureEngine:
         """清理资源，关闭线程池"""
         if self._capture_active.is_set():
             self.stop_capture()
-        self._preprocess_executor.shutdown(wait=False)
+        # 停止预处理轮询定时器（可能在 stop_capture 后仍在运行）
+        if self._preprocess_timer is not None:
+            self._preprocess_timer.stop()
+            self._preprocess_timer = None
+        self._preprocess_executor.shutdown(wait=True)

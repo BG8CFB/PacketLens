@@ -256,9 +256,16 @@ class MainWindow(QMainWindow):
                 self._analysis_worker.analysis_progress.disconnect(self._on_analysis_progress)
             except RuntimeError:
                 pass
-            # 超时后不强制置 None，让 finished 信号自然清理
+            try:
+                self._analysis_worker.analysis_stage.disconnect(self._on_analysis_stage)
+            except RuntimeError:
+                pass
             finished = self._analysis_worker.wait(3000)
             if finished:
+                self._analysis_worker = None
+            else:
+                # 超时后仍清除引用，断开的信号防止旧 Worker 回呼
+                logger.warning("AI Worker 未在 3 秒内停止，清除引用")
                 self._analysis_worker = None
 
     def _start_quick_analysis(self) -> None:

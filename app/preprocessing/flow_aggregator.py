@@ -221,10 +221,11 @@ class FlowAggregator:
             # 该方向的第一个包，初始化 max_seq
             state[max_seq_key] = seq
         else:
-            # 重传检测：处理 32 位序列号回绕
+            # 重传/乱序检测：处理 32 位序列号回绕
             diff = (seq - current_max) & 0xFFFFFFFF
             if diff > 0x80000000:
-                # seq 回退 → 重传或乱序（排除纯 ACK）
+                # seq 回退（排除纯 ACK）
+                # 注意：无法精确区分重传与乱序，统一计入 retransmit_count
                 if has_payload:
                     flow.retransmit_count += 1
             elif diff > 0:
