@@ -1006,6 +1006,7 @@ class TestAppConfigSchema:
             "default_mode": "deep",
             "last_interface": "eth0",
             "window_geometry": "100x200",
+            "custom_prompts": {},
         }
         dirty = ensure_app_config_schema(config)
         assert dirty is False

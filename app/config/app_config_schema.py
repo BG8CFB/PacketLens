@@ -21,6 +21,7 @@ _APP_CONFIG_DEFAULTS = {
     "default_mode": "quick",
     "last_interface": "",
     "window_geometry": "",
+    "custom_prompts": {},
 }
 
 # 需要 clamp 到合法范围的字段

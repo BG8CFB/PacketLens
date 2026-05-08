@@ -88,6 +88,7 @@ class PromptBuilder:
         context_window_tokens: int | None = None,
         max_input_chars: int | None = None,
         packets_per_flow_layer1: int | None = None,
+        custom_prompts: dict | None = None,
     ):
         self._context_window_tokens = (
             context_window_tokens if context_window_tokens is not None
@@ -101,6 +102,7 @@ class PromptBuilder:
             packets_per_flow_layer1 if packets_per_flow_layer1 is not None
             else _DEFAULT_PACKETS_PER_FLOW
         )
+        self._custom_prompts = custom_prompts or {}
 
     # ── Layer 1: 全量流量分析 ──
 
@@ -116,7 +118,7 @@ class PromptBuilder:
         Returns:
             (user_prompt, system_prompt)
         """
-        system = get_system_prompt()
+        system = get_system_prompt(self._custom_prompts.get("system"))
 
         # 统计数据格式化
         start_t = stats.get("capture_start_time", "")
@@ -260,41 +262,85 @@ class PromptBuilder:
             for fid in a.get("affected_flows", []):
                 anomalous_flow_ids.add(fid)
 
-        # 每条流 + 采样包（异常流提高采样数）
+        # 每条流 + 采样包（异常流提高采样数）— 预算感知增量构建
         pkt_index = _build_packet_flow_index(packets)
         flow_sections = []
+        # 预估非流部分的字符占用（统计数据 + 模板占位符），留出 20% 余量
+        estimated_overhead = 5000
+        flow_budget = self._max_input_chars - len(system) - estimated_overhead
+        if flow_budget < 2000:
+            flow_budget = 2000
+        current_flow_chars = 0
+        omitted_flows = 0
+
         for flow in flows:
             if flow.flow_id in anomalous_flow_ids:
                 sample_count = min(self._packets_per_flow_layer1 * 3, 20)
             else:
                 sample_count = self._packets_per_flow_layer1
             section = _format_flow_with_packets(flow, packets, sample_count, _index=pkt_index)
+            section_len = len(section) + 1  # +1 for newline
+            if current_flow_chars + section_len > flow_budget:
+                omitted_flows += 1
+                continue
             flow_sections.append(section)
+            current_flow_chars += section_len
 
-        user_prompt = get_layer1_template().format(
-            total_packets=stats.get("total_packets", 0),
-            total_bytes=stats.get("total_bytes", 0),
-            total_flows=stats.get("total_flows", 0),
-            duration=stats.get("duration", 0),
-            time_range=time_range,
-            bandwidth_bps=stats.get("bandwidth_bps", 0),
-            avg_packet_size=stats.get("avg_packet_size", 0),
-            avg_flow_size=stats.get("avg_flow_size", 0),
-            flow_size_median=stats.get("flow_size_median", 0),
-            protocol_distribution="\n".join(proto_lines) or "无数据",
-            top_src="\n".join(src_lines) or "无数据",
-            top_dst="\n".join(dst_lines) or "无数据",
-            top_flows="\n".join(top_flow_lines) or "无数据",
-            anomaly_summary="\n".join(anomaly_lines),
-            tcp_health=tcp_health_str,
-            dns_health=dns_health_str,
-            icmp_errors=icmp_errors_str,
-            ttl_distribution=ttl_distribution_str,
-            fragment_stats=fragment_stats_str,
-            broadcast_multicast=broadcast_multicast_str,
-            pps_timeline=pps_timeline_str,
-            all_flows_with_packets="\n".join(flow_sections),
-        )
+        if omitted_flows > 0:
+            flow_sections.append(f"\n...[因输入长度限制，已省略 {omitted_flows} 条流的详细信息]")
+
+        try:
+            user_prompt = get_layer1_template(self._custom_prompts.get("layer1")).format(
+                total_packets=stats.get("total_packets", 0),
+                total_bytes=stats.get("total_bytes", 0),
+                total_flows=stats.get("total_flows", 0),
+                duration=stats.get("duration", 0),
+                time_range=time_range,
+                bandwidth_bps=stats.get("bandwidth_bps", 0),
+                avg_packet_size=stats.get("avg_packet_size", 0),
+                avg_flow_size=stats.get("avg_flow_size", 0),
+                flow_size_median=stats.get("flow_size_median", 0),
+                protocol_distribution="\n".join(proto_lines) or "无数据",
+                top_src="\n".join(src_lines) or "无数据",
+                top_dst="\n".join(dst_lines) or "无数据",
+                top_flows="\n".join(top_flow_lines) or "无数据",
+                anomaly_summary="\n".join(anomaly_lines),
+                tcp_health=tcp_health_str,
+                dns_health=dns_health_str,
+                icmp_errors=icmp_errors_str,
+                ttl_distribution=ttl_distribution_str,
+                fragment_stats=fragment_stats_str,
+                broadcast_multicast=broadcast_multicast_str,
+                pps_timeline=pps_timeline_str,
+                all_flows_with_packets="\n".join(flow_sections),
+            )
+        except KeyError as e:
+            # 自定义模板占位符缺失 → 回退到默认模板（默认模板保证包含全部占位符，不会再次抛 KeyError）
+            logger.error(f"Layer1 自定义提示词占位符缺失: {e}，回退到默认模板")
+            user_prompt = get_layer1_template(None).format(
+                total_packets=stats.get("total_packets", 0),
+                total_bytes=stats.get("total_bytes", 0),
+                total_flows=stats.get("total_flows", 0),
+                duration=stats.get("duration", 0),
+                time_range=time_range,
+                bandwidth_bps=stats.get("bandwidth_bps", 0),
+                avg_packet_size=stats.get("avg_packet_size", 0),
+                avg_flow_size=stats.get("avg_flow_size", 0),
+                flow_size_median=stats.get("flow_size_median", 0),
+                protocol_distribution="\n".join(proto_lines) or "无数据",
+                top_src="\n".join(src_lines) or "无数据",
+                top_dst="\n".join(dst_lines) or "无数据",
+                top_flows="\n".join(top_flow_lines) or "无数据",
+                anomaly_summary="\n".join(anomaly_lines),
+                tcp_health=tcp_health_str,
+                dns_health=dns_health_str,
+                icmp_errors=icmp_errors_str,
+                ttl_distribution=ttl_distribution_str,
+                fragment_stats=fragment_stats_str,
+                broadcast_multicast=broadcast_multicast_str,
+                pps_timeline=pps_timeline_str,
+                all_flows_with_packets="\n".join(flow_sections),
+            )
 
         # 输入长度安全检查 + 截断保护
         prompt_len = len(user_prompt) + len(system)
@@ -324,27 +370,45 @@ class PromptBuilder:
         context: str = "",
     ) -> tuple[str, str]:
         """构建 Layer 2 提示词（单流深度分析）"""
-        system = get_system_prompt()
+        system = get_system_prompt(self._custom_prompts.get("system"))
 
         relevant_packets = _select_relevant_packets(packets, flow, max_packets=50)
         base_ts = flow.first_seen if flow.first_seen > 0 else 0.0
 
         pkt_lines = [_format_packet_line(p, base_ts) for p in relevant_packets]
 
-        user_prompt = get_layer2_template().format(
-            flow_id=flow.flow_id,
-            src_ip=flow.src_ip,
-            src_port=flow.src_port,
-            dst_ip=flow.dst_ip,
-            dst_port=flow.dst_port,
-            protocol=flow.protocol,
-            packet_count=flow.packet_count,
-            byte_count=flow.byte_count,
-            duration=f"{flow.duration:.2f}",
-            flags=",".join(sorted(flow.flags_set)) or "无",
-            packets_detail="\n".join(pkt_lines),
-            context=context or "无额外上下文",
-        )
+        try:
+            user_prompt = get_layer2_template(self._custom_prompts.get("layer2")).format(
+                flow_id=flow.flow_id,
+                src_ip=flow.src_ip,
+                src_port=flow.src_port,
+                dst_ip=flow.dst_ip,
+                dst_port=flow.dst_port,
+                protocol=flow.protocol,
+                packet_count=flow.packet_count,
+                byte_count=flow.byte_count,
+                duration=f"{flow.duration:.2f}",
+                flags=",".join(sorted(flow.flags_set)) or "无",
+                packets_detail="\n".join(pkt_lines),
+                context=context or "无额外上下文",
+            )
+        except KeyError as e:
+            # 自定义模板占位符缺失 → 回退到默认模板（默认模板保证包含全部占位符，不会再次抛 KeyError）
+            logger.error(f"Layer2 自定义提示词占位符缺失: {e}，回退到默认模板")
+            user_prompt = get_layer2_template(None).format(
+                flow_id=flow.flow_id,
+                src_ip=flow.src_ip,
+                src_port=flow.src_port,
+                dst_ip=flow.dst_ip,
+                dst_port=flow.dst_port,
+                protocol=flow.protocol,
+                packet_count=flow.packet_count,
+                byte_count=flow.byte_count,
+                duration=f"{flow.duration:.2f}",
+                flags=",".join(sorted(flow.flags_set)) or "无",
+                packets_detail="\n".join(pkt_lines),
+                context=context or "无额外上下文",
+            )
 
         return user_prompt, system
 
@@ -359,7 +423,7 @@ class PromptBuilder:
         confirmed_flow_count: int,
     ) -> tuple[str, str]:
         """构建 Layer 3 综合报告提示词"""
-        system = get_system_prompt()
+        system = get_system_prompt(self._custom_prompts.get("system"))
 
         layer2_combined = "\n\n---\n\n".join(layer2_results) if layer2_results else "无可疑流需要深度分析"
 
@@ -367,14 +431,26 @@ class PromptBuilder:
         layer1_limit = int(self._max_input_chars * _LAYER3_LAYER1_RATIO)
         layer2_limit = int(self._max_input_chars * _LAYER3_LAYER2_RATIO)
 
-        user_prompt = get_layer3_template().format(
-            layer1_result=_smart_truncate_text(layer1_raw, layer1_limit),
-            layer2_results=_smart_truncate_blocks(layer2_combined, layer2_limit),
-            total_packets=stats.get("total_packets", 0),
-            total_flows=stats.get("total_flows", 0),
-            suspicious_flow_count=suspicious_flow_count,
-            confirmed_flow_count=confirmed_flow_count,
-        )
+        try:
+            user_prompt = get_layer3_template(self._custom_prompts.get("layer3")).format(
+                layer1_result=_smart_truncate_text(layer1_raw, layer1_limit),
+                layer2_results=_smart_truncate_blocks(layer2_combined, layer2_limit),
+                total_packets=stats.get("total_packets", 0),
+                total_flows=stats.get("total_flows", 0),
+                suspicious_flow_count=suspicious_flow_count,
+                confirmed_flow_count=confirmed_flow_count,
+            )
+        except KeyError as e:
+            # 自定义模板占位符缺失 → 回退到默认模板（默认模板保证包含全部占位符，不会再次抛 KeyError）
+            logger.error(f"Layer3 自定义提示词占位符缺失: {e}，回退到默认模板")
+            user_prompt = get_layer3_template(None).format(
+                layer1_result=_smart_truncate_text(layer1_raw, layer1_limit),
+                layer2_results=_smart_truncate_blocks(layer2_combined, layer2_limit),
+                total_packets=stats.get("total_packets", 0),
+                total_flows=stats.get("total_flows", 0),
+                suspicious_flow_count=suspicious_flow_count,
+                confirmed_flow_count=confirmed_flow_count,
+            )
 
         return user_prompt, system
 

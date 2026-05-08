@@ -27,6 +27,7 @@ DEFAULT_CONFIG = {
     "default_mode": "quick",
     "last_interface": "",
     "window_geometry": "",
+    "custom_prompts": {},
     # AI 多 provider 配置
     "ai_providers": [],
     "ai_active_provider": "",
@@ -157,3 +158,15 @@ class ConfigManager:
         with self._lock:
             self._config["ai_providers"] = providers
             self._config["ai_active_provider"] = active_name
+
+    # ── 自定义提示词 ──
+
+    def get_custom_prompts(self) -> dict:
+        """返回自定义提示词覆盖（system/layer1/layer2/layer3），空 dict 表示全部使用默认值"""
+        with self._lock:
+            return copy.deepcopy(self._config.get("custom_prompts", {}))
+
+    def set_custom_prompts(self, prompts: dict) -> None:
+        """保存自定义提示词覆盖"""
+        with self._lock:
+            self._config["custom_prompts"] = prompts

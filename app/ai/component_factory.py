@@ -33,12 +33,13 @@ def create_ai_engine(ai_config: dict) -> AIEngine:
     )
 
 
-def create_prompt_builder(ai_config: dict) -> PromptBuilder:
+def create_prompt_builder(ai_config: dict, custom_prompts: dict | None = None) -> PromptBuilder:
     """根据 AI 配置创建 PromptBuilder 实例"""
     return PromptBuilder(
         context_window_tokens=ai_config["context_window_tokens"],
         max_input_chars=ai_config.get("max_input_chars"),
         packets_per_flow_layer1=ai_config.get("packets_per_flow_layer1"),
+        custom_prompts=custom_prompts,
     )
 
 

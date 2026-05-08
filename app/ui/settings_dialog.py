@@ -1,4 +1,4 @@
-"""设置对话框 — AI 模型配置 + 抓包配置（Tab 分页）
+"""设置对话框 — AI 模型配置 + 抓包配置 + 提示词编辑（Tab 分页）
 
 AI 模型 Tab 的结构：
 1. 左侧：当前使用模型（精简只读卡片，随激活模型动态刷新）
@@ -10,6 +10,7 @@ AI 模型 Tab 的结构：
 from __future__ import annotations
 
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QAbstractSpinBox,
     QCheckBox,
@@ -25,13 +26,18 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QMessageBox,
     QPushButton,
+    QScrollArea,
     QSpinBox,
     QTabWidget,
+    QTextEdit,
     QVBoxLayout,
     QWidget,
 )
 
 from app.ai.component_factory import test_connection
+from app.ai.prompts.deep_analysis import LAYER2_TEMPLATE, LAYER3_TEMPLATE
+from app.ai.prompts.quick_analysis import LAYER1_TEMPLATE
+from app.ai.prompts.system_prompt import SYSTEM_PROMPT
 from app.config.ai_defaults import AI_DEFAULTS
 from app.constants import DEFAULT_CAPTURE_DURATION, MAX_CAPTURE_DURATION, MIN_CAPTURE_DURATION
 from app.storage.config_manager import ConfigManager
@@ -52,6 +58,16 @@ class SettingsDialog(QDialog):
         self._selected_index: int = -1
 
         self._test_poll_timer = None  # 测试连接轮询定时器
+        self._custom_prompts = dict(config.get_custom_prompts())  # 工作副本
+
+        # 提示词默认值引用（用于重置和对比）
+        self._prompt_defaults = {
+            "system": SYSTEM_PROMPT,
+            "layer1": LAYER1_TEMPLATE,
+            "layer2": LAYER2_TEMPLATE,
+            "layer3": LAYER3_TEMPLATE,
+        }
+        self._prompt_edits: dict[str, QTextEdit] = {}
 
         self.setWindowTitle("PacketLens 设置")
         self.setMinimumWidth(820)
@@ -69,6 +85,7 @@ class SettingsDialog(QDialog):
         self._tabs = QTabWidget()
         self._tabs.addTab(self._create_ai_tab(), "AI 模型配置")
         self._tabs.addTab(self._create_capture_tab(), "抓包设置")
+        self._tabs.addTab(self._create_prompt_tab(), "提示词编辑")
         layout.addWidget(self._tabs)
 
         # 底部按钮
@@ -672,6 +689,8 @@ class SettingsDialog(QDialog):
         self._config.set("default_capture_duration", self._duration_spin.value())
         self._config.set("auto_analyze", self._auto_analyze_cb.isChecked())
         self._config.set("auto_save_pcap", self._auto_save_cb.isChecked())
+        if not self._save_prompt_overrides():
+            return
         self._config.save()
         self._cleanup_test_timer()
         self.accept()
@@ -683,6 +702,177 @@ class SettingsDialog(QDialog):
         else:
             self._api_key_edit.setEchoMode(QLineEdit.Password)
             self._toggle_key_btn.setText("显示")
+
+    # ── 提示词编辑 Tab ──
+
+    _PROMPT_META = {
+        "system": {
+            "label": "系统提示词 (System Prompt)",
+            "desc": "定义 AI 的角色、分析原则、严重级别标准和输出格式。",
+            "placeholders": "无占位符 — 纯文本角色定义",
+            "required_fields": [],
+        },
+        "layer1": {
+            "label": "快速分析提示词 (Layer 1 — 全量流量分析)",
+            "desc": "全量流量概览分析，填充统计数据和流摘要后发送给 AI。",
+            "placeholders": "total_packets, total_bytes, total_flows, duration, time_range, "
+                            "bandwidth_bps, avg_packet_size, avg_flow_size, flow_size_median, "
+                            "protocol_distribution, top_src, top_dst, top_flows, anomaly_summary, "
+                            "tcp_health, dns_health, icmp_errors, ttl_distribution, fragment_stats, "
+                            "broadcast_multicast, pps_timeline, all_flows_with_packets",
+            "required_fields": [
+                "total_packets", "total_bytes", "total_flows", "duration", "time_range",
+                "bandwidth_bps", "avg_packet_size", "avg_flow_size", "flow_size_median",
+                "protocol_distribution", "top_src", "top_dst", "top_flows", "anomaly_summary",
+                "tcp_health", "dns_health", "icmp_errors", "ttl_distribution", "fragment_stats",
+                "broadcast_multicast", "pps_timeline", "all_flows_with_packets",
+            ],
+        },
+        "layer2": {
+            "label": "深度分析提示词 (Layer 2 — 单流逐包分析)",
+            "desc": "对可疑流进行逐包级精细分析，验证异常标记。",
+            "placeholders": "flow_id, src_ip, src_port, dst_ip, dst_port, protocol, "
+                            "packet_count, byte_count, duration, flags, packets_detail, context",
+            "required_fields": [
+                "flow_id", "src_ip", "src_port", "dst_ip", "dst_port", "protocol",
+                "packet_count", "byte_count", "duration", "flags", "packets_detail", "context",
+            ],
+        },
+        "layer3": {
+            "label": "综合报告提示词 (Layer 3 — 综合分析报告)",
+            "desc": "汇总 Layer 1 和 Layer 2 结果，生成最终安全报告。",
+            "placeholders": "layer1_result, layer2_results, total_packets, total_flows, "
+                            "suspicious_flow_count, confirmed_flow_count",
+            "required_fields": [
+                "layer1_result", "layer2_results", "total_packets", "total_flows",
+                "suspicious_flow_count", "confirmed_flow_count",
+            ],
+        },
+    }
+
+    def _create_prompt_tab(self) -> QWidget:
+        """提示词编辑 Tab — 可滚动的 4 个提示词编辑器"""
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QScrollArea.NoFrame)
+
+        container = QWidget()
+        layout = QVBoxLayout(container)
+        layout.setSpacing(12)
+
+        # 顶部说明
+        info = QLabel(
+            "编辑 AI 分析使用的提示词模板。删除必要的 {占位符} 可能导致分析失败。"
+            "修改后点击「保存」生效。"
+        )
+        info.setWordWrap(True)
+        info.setStyleSheet("color: #a6adc8; padding: 4px 0;")
+        layout.addWidget(info)
+
+        for key in ("system", "layer1", "layer2", "layer3"):
+            meta = self._PROMPT_META[key]
+            group = self._create_prompt_group(key, meta)
+            layout.addWidget(group)
+
+        layout.addStretch()
+        scroll.setWidget(container)
+        return scroll
+
+    def _create_prompt_group(self, key: str, meta: dict) -> QGroupBox:
+        """创建单个提示词编辑组"""
+        group = QGroupBox(meta["label"])
+        layout = QVBoxLayout(group)
+        layout.setContentsMargins(12, 14, 12, 12)
+        layout.setSpacing(8)
+
+        # 描述
+        desc = QLabel(meta["desc"])
+        desc.setWordWrap(True)
+        desc.setStyleSheet("color: #cdd6f4;")
+        layout.addWidget(desc)
+
+        # 占位符说明
+        ph_label = QLabel(f"可用占位符: {meta['placeholders']}")
+        ph_label.setWordWrap(True)
+        ph_label.setStyleSheet("color: #a6adc8; font-size: 11px;")
+        layout.addWidget(ph_label)
+
+        # 文本编辑器
+        editor = QTextEdit()
+        editor.setAcceptRichText(False)
+        editor.setFont(QFont("Consolas", 10))
+        editor.setMinimumHeight(150)
+
+        # 加载内容：优先使用自定义覆盖，否则使用默认值
+        custom_text = self._custom_prompts.get(key, "")
+        default_text = self._prompt_defaults[key]
+        editor.setPlainText(custom_text if custom_text else default_text)
+
+        self._prompt_edits[key] = editor
+        layout.addWidget(editor)
+
+        # 恢复默认按钮
+        btn_row = QHBoxLayout()
+        btn_row.addStretch()
+        reset_btn = QPushButton("恢复默认值")
+        reset_btn.setFixedWidth(120)
+        reset_btn.clicked.connect(lambda checked=False, k=key, t=default_text: self._reset_prompt(k, t))
+        btn_row.addWidget(reset_btn)
+        layout.addLayout(btn_row)
+
+        return group
+
+    def _reset_prompt(self, key: str, default_text: str) -> None:
+        """恢复指定提示词为硬编码默认值"""
+        editor = self._prompt_edits.get(key)
+        if editor:
+            editor.setPlainText(default_text)
+
+    def _save_prompt_overrides(self) -> bool:
+        """收集提示词编辑器内容，校验后保存到 ConfigManager
+
+        Returns:
+            True 表示校验通过，False 表示用户拒绝保存（应中止整个保存流程）
+        """
+        prompts: dict[str, str] = {}
+        warnings: list[str] = []
+
+        for key, editor in self._prompt_edits.items():
+            text = editor.toPlainText().strip()
+            default_text = self._prompt_defaults[key]
+
+            # 仅保存与默认值不同的内容
+            if text and text != default_text:
+                prompts[key] = text
+
+                # 校验占位符完整性
+                meta = self._PROMPT_META[key]
+                if meta["required_fields"]:
+                    missing = []
+                    for field in meta["required_fields"]:
+                        if f"{{{field}}}" not in text:
+                            missing.append(field)
+                    if missing:
+                        label = self._PROMPT_META[key]["label"].split("(")[0].strip()
+                        warnings.append(
+                            f"「{label}」缺少占位符: {', '.join(missing)}"
+                        )
+
+        if warnings:
+            reply = QMessageBox.warning(
+                self,
+                "提示词占位符缺失",
+                "以下提示词缺少必要的 {占位符}，可能导致 AI 分析失败：\n\n"
+                + "\n".join(f"• {w}" for w in warnings)
+                + "\n\n是否仍然保存？",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No,
+            )
+            if reply == QMessageBox.No:
+                return False
+
+        self._config.set_custom_prompts(prompts)
+        return True
 
     def _cleanup_test_timer(self) -> None:
         if self._test_poll_timer is not None:

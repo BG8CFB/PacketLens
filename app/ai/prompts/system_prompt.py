@@ -98,5 +98,5 @@ SYSTEM_PROMPT = """# 角色定义
 }"""
 
 
-def get_system_prompt() -> str:
-    return SYSTEM_PROMPT
+def get_system_prompt(override: str | None = None) -> str:
+    return override if override else SYSTEM_PROMPT

@@ -91,5 +91,5 @@ LAYER1_TEMPLATE = """# 全量流量分析任务
 6. 严格输出 JSON，不要包含 JSON 之外的文字或 markdown 代码块标记"""
 
 
-def get_layer1_template() -> str:
-    return LAYER1_TEMPLATE
+def get_layer1_template(override: str | None = None) -> str:
+    return override if override else LAYER1_TEMPLATE

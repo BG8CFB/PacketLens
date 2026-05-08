@@ -113,6 +113,11 @@ class AnalysisResult:
     risk_level: str = ""  # Critical | High | Medium | Low | Normal
     flow_analyses: list[FlowAnalysis] = field(default_factory=list)
     fault_insights: dict = field(default_factory=dict)
+    cancelled: bool = False
+
+    @property
+    def is_cancelled(self) -> bool:
+        return self.cancelled
 
     @property
     def critical_count(self) -> int:
@@ -150,6 +155,7 @@ class AnalysisResult:
             "risk_level": self.risk_level,
             "flow_analyses": [fa.to_dict() for fa in self.flow_analyses],
             "fault_insights": self.fault_insights,
+            "cancelled": self.cancelled,
         }
 
     @classmethod
@@ -183,4 +189,5 @@ class AnalysisResult:
             risk_level=data.get("risk_level", ""),
             flow_analyses=flow_analyses,
             fault_insights=data.get("fault_insights", {}),
+            cancelled=data.get("cancelled", False),
         )

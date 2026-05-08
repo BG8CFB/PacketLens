@@ -132,9 +132,9 @@ LAYER3_TEMPLATE = """# 综合分析报告生成
 }}"""
 
 
-def get_layer2_template() -> str:
-    return LAYER2_TEMPLATE
+def get_layer2_template(override: str | None = None) -> str:
+    return override if override else LAYER2_TEMPLATE
 
 
-def get_layer3_template() -> str:
-    return LAYER3_TEMPLATE
+def get_layer3_template(override: str | None = None) -> str:
+    return override if override else LAYER3_TEMPLATE
