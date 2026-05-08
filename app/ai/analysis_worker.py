@@ -77,6 +77,7 @@ class AnalysisWorker(QThread):
             max_layer2_flows if max_layer2_flows is not None
             else AI_DEFAULTS["max_layer2_flows"]
         )
+        self._layer1_usage: dict = {}
 
     def run(self) -> None:
         """执行分析"""
@@ -89,10 +90,7 @@ class AnalysisWorker(QThread):
             else:
                 result = self._run_full_deep(session_id)
 
-            if not self.isInterruptionRequested():
-                self.analysis_completed.emit(result)
-            else:
-                logger.info("AI 分析已被取消")
+            self.analysis_completed.emit(result)
 
         except ConnectionError as e:
             error_msg = f"网络连接失败，请检查网络: {str(e)[:200]}"
@@ -204,6 +202,8 @@ class AnalysisWorker(QThread):
             return self._empty_result(session_id, "deep", start)
 
         layer1_result = self._result_parser.parse(layer1_text, session_id, "deep")
+        # 保存 Layer 1 token usage（Layer 3 会覆盖 engine.last_usage）
+        self._layer1_usage = self._engine.last_usage
 
         # ── Layer 2: 可疑流并行深度分析 ──
         suspicious_flows = self._extract_suspicious_flows(layer1_result)
@@ -220,7 +220,7 @@ class AnalysisWorker(QThread):
                 f"并行分析 {layer2_count} 条...\n"
             )
 
-            layer2_texts, flow_analyses = self._run_layer2_parallel(
+            layer2_texts, flow_analyses, layer2_usage = self._run_layer2_parallel(
                 suspicious_flows[:layer2_count], layer1_result, layer1_text,
             )
 
@@ -281,8 +281,12 @@ class AnalysisWorker(QThread):
                     existing_keys.add(key)
 
         final_result.duration_seconds = elapsed
-        # 累加三层 token_usage（Layer 1 的已存于 engine，Layer 2 的在 worker 副本中丢失，Layer 3 的刚完成）
-        final_result.token_usage = self._engine.last_usage
+        # 累加三层 token_usage
+        final_result.token_usage = self._aggregate_usage(
+            layer1_usage=self._layer1_usage,
+            layer2_usage=layer2_usage,
+            layer3_usage=self._engine.last_usage,
+        )
         return final_result
 
     def _run_layer2_parallel(
@@ -290,24 +294,16 @@ class AnalysisWorker(QThread):
         flows: list[FlowRecord],
         layer1_result: AnalysisResult,
         layer1_text: str,
-    ) -> tuple[list[str], list[FlowAnalysis]]:
-        """并行执行 Layer 2 分析，返回原始响应文本和 FlowAnalysis 列表
-
-        使用线程池并发，并发数受 max_concurrency 限制。
-        每个 Worker 线程独立创建 AIEngine 副本以保证线程安全。
-        """
+    ) -> tuple[list[str], list[FlowAnalysis], dict]:
+        """并行执行 Layer 2 分析，返回原始响应文本、FlowAnalysis 列表和汇总 token usage"""
         results: dict[int, str] = {}
+        layer2_usage: dict = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
         context = self._build_layer2_context(layer1_result, layer1_text)
 
-        def analyze_single_flow(idx: int, flow: FlowRecord) -> tuple[int, str | None]:
-            """单条流的分析任务（在工作线程中执行）
-
-            返回 (idx, text|None)。text 为 None 表示该任务被请求取消，
-            上层应在结果聚合时跳过 None 条目。
-            """
-            # 提交后取消：进入函数前先短路一次
+        def analyze_single_flow(idx: int, flow: FlowRecord) -> tuple[int, str | None, dict | None]:
+            """返回 (idx, text|None, usage|None)"""
             if self.isInterruptionRequested():
-                return idx, None
+                return idx, None, None
 
             try:
                 worker_engine = self._engine.clone_for_worker(max_tokens=self._max_tokens)
@@ -318,8 +314,6 @@ class AnalysisWorker(QThread):
                     context=context,
                 )
 
-                # cancel-aware on_chunk：检测到中断时抛出内部信号，
-                # 让 LangChain stream 立即停止读取下一块（提前返回已收到的内容）。
                 def _cancel_aware_chunk(_chunk: str) -> None:
                     if self.isInterruptionRequested():
                         raise _Layer2Cancelled()
@@ -331,15 +325,15 @@ class AnalysisWorker(QThread):
                     temperature=self._temperature,
                     max_tokens=self._max_tokens,
                 )
-                return idx, response
+                return idx, response, worker_engine.last_usage
 
             except _Layer2Cancelled:
                 logger.info(f"Layer 2 流 {flow.flow_id} 在请求中被取消")
-                return idx, None
+                return idx, None, None
 
             except Exception as e:
                 logger.warning(f"Layer 2 分析流 {flow.flow_id} 失败: {e}")
-                return idx, f"分析失败: {str(e)[:200]}"
+                return idx, f"分析失败: {str(e)[:200]}", None
 
         workers = min(len(flows), self._max_concurrency)
         logger.info(f"Layer 2 并行分析: {len(flows)} 条流, {workers} 并发")
@@ -356,11 +350,13 @@ class AnalysisWorker(QThread):
                     pool.shutdown(wait=False, cancel_futures=True)
                     break
                 try:
-                    idx, text = future.result()
+                    idx, text, usage = future.result()
                     if text is None:
-                        # 该流被取消，不计入完成数
                         continue
                     results[idx] = text
+                    if usage:
+                        for k in layer2_usage:
+                            layer2_usage[k] += usage.get(k, 0)
                     completed += 1
                     flow = flows[idx]
                     self.analysis_progress.emit(
@@ -383,7 +379,7 @@ class AnalysisWorker(QThread):
             flow_analysis = self._result_parser.parse_layer2(text)
             flow_analyses.append(flow_analysis)
 
-        return ordered_texts, flow_analyses
+        return ordered_texts, flow_analyses, layer2_usage
 
     @staticmethod
     def _build_layer2_context(
@@ -457,6 +453,21 @@ class AnalysisWorker(QThread):
         return len(flow_ids)
 
     @staticmethod
+    def _aggregate_usage(
+        layer1_usage: dict,
+        layer2_usage: dict,
+        layer3_usage: dict,
+    ) -> dict:
+        """累加三层 token usage"""
+        keys = ("prompt_tokens", "completion_tokens", "total_tokens")
+        result = {}
+        for k in keys:
+            result[k] = layer1_usage.get(k, 0) + layer2_usage.get(k, 0) + layer3_usage.get(k, 0)
+        if any(u.get("estimated") for u in (layer1_usage, layer2_usage, layer3_usage)):
+            result["estimated"] = True
+        return result
+
+    @staticmethod
     def _empty_result(session_id: str, mode: str, start: float) -> AnalysisResult:
         """取消时返回空结果"""
         return AnalysisResult(
@@ -464,6 +475,7 @@ class AnalysisWorker(QThread):
             analysis_mode=mode,
             timestamp=datetime.now(tz=timezone.utc),
             summary="分析已被取消",
+            cancelled=True,
             issues=[],
             raw_ai_response="",
             duration_seconds=time.time() - start,

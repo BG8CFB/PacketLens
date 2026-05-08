@@ -217,6 +217,19 @@ class AnalysisPanel(QWidget):
         self._reanalyze_btn.setEnabled(True)
         self._stream_text = ""
 
+    def reset_from_cancel(self) -> None:
+        """分析取消后恢复面板可用状态"""
+        self._stop_thinking_animation()
+        self._stream_output.hide()
+        self._stream_toggle.hide()
+        self._stage_label.setVisible(False)
+        self._summary_label.setText("分析已取消")
+        self._summary_label.setStyleSheet("font-size: 14px; color: #a6adc8; margin-top: 4px; margin-bottom: 4px;")
+        self._stats_label.setText("可随时重新启动分析。")
+        self._deep_btn.setEnabled(True)
+        self._reanalyze_btn.setEnabled(True)
+        self._stream_text = ""
+
     def update_progress(self, chunk: str) -> None:
         """流式更新进度"""
         self._stream_text += chunk

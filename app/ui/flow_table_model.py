@@ -31,38 +31,6 @@ class FlowTableModel(QAbstractTableModel):
         return None
 
     def data(self, index: QModelIndex, role=Qt.DisplayRole):
-        if not index.isValid() or role not in (Qt.DisplayRole, Qt.ToolTipRole):
-            return None
-
-        row = index.row()
-        if row < 0 or row >= len(self._flows):
-            return None
-
-        flow = self._flows[row]
-        col = index.column()
-
-        if col == 0:
-            return flow.src_ip
-        elif col == 1:
-            return flow.dst_ip
-        elif col == 2:
-            return str(flow.src_port)
-        elif col == 3:
-            return str(flow.dst_port)
-        elif col == 4:
-            return flow.protocol
-        elif col == 5:
-            return str(flow.packet_count)
-        elif col == 6:
-            return _format_bytes(flow.byte_count)
-        elif col == 7:
-            return f"{flow.duration:.1f}"
-        elif col == 8:
-            return flow.service or "-"
-
-        return None
-
-    def data(self, index: QModelIndex, role=Qt.DisplayRole):
         if not index.isValid():
             return None
 

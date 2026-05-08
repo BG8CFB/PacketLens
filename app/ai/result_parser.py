@@ -101,21 +101,7 @@ class ResultParser:
 
     def _build_result(self, parsed: dict, raw: str, session_id: str, mode: str) -> AnalysisResult:
         """从解析后的字典构建 AnalysisResult"""
-        issues = []
-        for item in parsed.get("issues", []):
-            if not isinstance(item, dict):
-                continue
-            issues.append(
-                AnalysisIssue(
-                    severity=normalize_severity(item.get("severity", "Info")),
-                    category=normalize_category(item.get("category", "General")),
-                    title=item.get("title", "未命名"),
-                    description=item.get("description", ""),
-                    affected_flows=item.get("affected_flows") if isinstance(item.get("affected_flows"), list) else [],
-                    affected_ips=item.get("affected_ips") if isinstance(item.get("affected_ips"), list) else [],
-                    recommendation=item.get("recommendation", ""),
-                )
-            )
+        issues = self._parse_issues(parsed.get("issues", []))
 
         return AnalysisResult(
             session_id=session_id,
@@ -154,21 +140,7 @@ class ResultParser:
             confidence = 0.0
 
         # 提取 issues
-        issues = []
-        for item in parsed.get("issues", []):
-            if not isinstance(item, dict):
-                continue
-            issues.append(
-                AnalysisIssue(
-                    severity=normalize_severity(item.get("severity", "Info")),
-                    category=normalize_category(item.get("category", "General")),
-                    title=item.get("title", "未命名"),
-                    description=item.get("description", ""),
-                    affected_flows=item.get("affected_flows", []),
-                    affected_ips=item.get("affected_ips", []),
-                    recommendation=item.get("recommendation", ""),
-                )
-            )
+        issues = self._parse_issues(parsed.get("issues", []))
 
         # 提取 evidence
         evidence = parsed.get("evidence", [])
