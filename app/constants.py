@@ -10,6 +10,7 @@ from app.config.provider_loader import load_builtin_provider  # noqa: F401
 # 应用信息
 APP_NAME = "PacketLens"
 APP_VERSION = "1.0.0"
+REPO_URL = "https://github.com/BG8CFB/PacketLens"
 
 # 抓包配置
 DEFAULT_CAPTURE_DURATION = 20  # 秒

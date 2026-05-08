@@ -11,3 +11,4 @@ data/
 *.db
 .coverage
 htmlcov/
+nuitka-crash-report.xml
